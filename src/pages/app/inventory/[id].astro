@@ -118,7 +118,7 @@ const isDown = (l: typeof logs[number]) => (l.kind === 'retired' && l.outOfServi
     <a href={`/app/bookings/new?items=${id}:1`} class="btn-ghost"><Icon name="plus" size={16} />Book this</a>
   </Fragment>
 
-  <Crumbs items={[{ label: 'Inventory', href: '/app/inventory' }, { label: item.kind === 'package' ? 'Packages' : item.kind === 'addon' ? 'Add-ons' : 'Rentals', href: `/app/inventory?kind=${item.kind}` }, { label: item.name }]} />
+  <Crumbs slot="crumbs" items={[{ label: 'Inventory', href: '/app/inventory' }, { label: item.kind === 'package' ? 'Packages' : item.kind === 'addon' ? 'Add-ons' : 'Rentals', href: `/app/inventory?kind=${item.kind}` }, { label: item.name }]} />
   {done === 'created' && (
     <NextSteps title={`${item.name} is in your inventory`} text={item.active ? 'It’s bookable on your website right now with live availability.' : 'It’s saved but hidden — tick “Active” when you’re ready to take bookings.'} celebrate dismiss={`/app/inventory/${id}`}
       actions={[

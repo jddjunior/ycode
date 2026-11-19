@@ -3,6 +3,9 @@ import { and, eq, ne, or, sql, inArray, desc } from 'drizzle-orm';
 import { z } from 'zod';
 import AppLayout from '../../../layouts/AppLayout.astro';
 import Icon from '../../../components/Icon.astro';
+import NextSteps from '../../../components/growth/NextSteps.astro';
+import Guide from '../../../components/growth/Guide.astro';
+import Enhance from '../../../components/growth/Enhance.astro';
 import { getDb, schema } from '../../../db/client';
 import { formData, str } from '../../../lib/forms';
 import { PLANS, PARTNER_SHARE_BPS, REFERRAL_MONTHS, MARKETPLACE_FEE_BPS } from '../../../lib/plans';
@@ -12,7 +15,7 @@ import { send } from '../../../lib/notify';
 import { platformUrl, invalidateTenantCache } from '../../../lib/tenant';
 import { rateLimit } from '../../../lib/ratelimit';
 import { isValidDay } from '../../../lib/time';
-import { ctx, done, fmtDay, pct } from '../../../lib/growth/app';
+import { ctx, done, go, invalid, fmtDay, pct } from '../../../lib/growth/app';
 
 const { t, tenantId, canEdit } = ctx(Astro);
 const db = await getDb();
@@ -28,6 +31,8 @@ const Overflow = z.object({
   message: z.string().max(1000),
 }).refine((x) => x.email || x.phone, { message: 'Add an email or phone so your partner can reach them', path: ['email'] });
 
+let ovErrors: Record<string, string> = {};
+let ovValues: Record<string, string> = { partnershipId: '', name: '', email: '', phone: '', eventDate: '', zip: '', message: '' };
 const f = await formData(Astro);
 if (f) {
   if (!canEdit) return done(Astro, 'Only owners and managers can manage partnerships.', undefined, 'error');
@@ -36,7 +41,7 @@ if (f) {
     const on = str(f, 'on', 2) === '1';
     await db.update(schema.tenants).set({ marketplaceListed: on, updatedAt: new Date() }).where(eq(schema.tenants.id, tenantId));
     invalidateTenantCache();
-    return done(Astro, on ? 'You’re listed on the BounceOS marketplace and partner network.' : 'Hidden from the marketplace and partner search.', '/app/growth#marketplace');
+    return on ? go(Astro, '/app/growth?done=listed') : done(Astro, 'Hidden from the marketplace and partner search.', '/app/growth#marketplace');
   }
   if (action === 'request') {
     const to = str(f, 'to', 40);
@@ -51,7 +56,7 @@ if (f) {
       else return done(Astro, `You already have a ${ex?.status ?? ''} partnership with ${other.name}.`, '/app/growth#partners', 'error');
     }
     if (other.email) await send({ tenantId: other.id, channel: 'email', to: other.email, subject: `${t.name} wants to send you overflow bookings`, body: `${t.name} (${t.city}, ${t.state}) asked to join your BounceOS partner network.\n\nWhen they're sold out, they can pass you customers. You keep the booking; ${t.name} earns ${pct(PARTNER_SHARE_BPS)} of the rental subtotal on bookings that come from their referrals.\n\nAccept or decline: ${platformUrl()}/app/growth#partners` });
-    return done(Astro, `Request sent to ${other.name}. They’ll see it in Referrals & Partners.`, '/app/growth#partners');
+    return go(Astro, `/app/growth?done=requested&to=${other.id}`);
   }
   if (action === 'accept' || action === 'decline') {
     const id = str(f, 'id', 40);
@@ -60,7 +65,7 @@ if (f) {
     const [row] = await db.update(P).set({ status: action === 'accept' ? 'active' : 'declined' }).where(and(eq(P.id, id), eq(P.toTenantId, tenantId), eq(P.status, 'pending'))).returning();
     if (!row) return done(Astro, 'That request is no longer pending.', '/app/growth#partners', 'error');
     await db.insert(schema.activity).values({ tenantId, kind: 'partner', message: action === 'accept' ? 'You accepted a new overflow partner.' : 'You declined a partner request.' });
-    return done(Astro, action === 'accept' ? 'Partnership active — they can now send you overflow leads.' : 'Request declined.', '/app/growth#partners');
+    return action === 'accept' ? go(Astro, `/app/growth?done=accepted&from=${row.fromTenantId}`) : done(Astro, 'Request declined. They won’t be able to send you leads.', '/app/growth#partners');
   }
   if (action === 'end') {
     const id = str(f, 'id', 40);
@@ -69,8 +74,10 @@ if (f) {
     return done(Astro, 'Partnership ended.', '/app/growth#partners');
   }
   if (action === 'overflow') {
-    const r = Overflow.safeParse({ partnershipId: str(f, 'partnershipId', 40), name: str(f, 'name', 100), email: str(f, 'email', 200).toLowerCase(), phone: str(f, 'phone', 30), eventDate: str(f, 'eventDate', 10), zip: str(f, 'zip', 5), message: str(f, 'message', 1000) });
-    if (!r.success) return done(Astro, r.error.issues[0].message, '/app/growth#overflow', 'error');
+    ovValues = { partnershipId: str(f, 'partnershipId', 40), name: str(f, 'name', 100), email: str(f, 'email', 200).toLowerCase(), phone: str(f, 'phone', 30), eventDate: str(f, 'eventDate', 10), zip: str(f, 'zip', 5), message: str(f, 'message', 1000) };
+    const r = Overflow.safeParse(ovValues);
+    if (!r.success) { for (const i of r.error.issues) ovErrors[String(i.path[0] ?? '_')] ??= i.message; Astro.response.status = 422; }
+    else {
     if (!rateLimit(`overflow:${tenantId}`, 30, 2)) return done(Astro, 'Slow down — too many leads sent in a short time.', '/app/growth#overflow', 'error');
     const [ps] = await db.select().from(P).where(and(eq(P.id, r.data.partnershipId), eq(P.fromTenantId, tenantId), eq(P.status, 'active'))).limit(1);
     if (!ps) return done(Astro, 'Pick an active partner (they must have accepted your request).', '/app/growth#overflow', 'error');
@@ -83,9 +90,10 @@ if (f) {
     });
     if (partner.email) await send({ tenantId: partner.id, channel: 'email', to: partner.email, subject: `New overflow lead from ${t.name}: ${r.data.name}`, body: `${t.name} sent you a customer they couldn't serve.\n\nName: ${r.data.name}\nEmail: ${r.data.email || '—'}\nPhone: ${r.data.phone || '—'}\nEvent date: ${r.data.eventDate || '—'}\nZIP: ${r.data.zip || '—'}\n\n${r.data.message}\n\nReach out fast — they're expecting your call. Open it in BounceOS: ${platformUrl()}/app/customers` });
     await db.insert(schema.activity).values({ tenantId, kind: 'partner', message: `You sent ${r.data.name} to ${partner.name}. You'll earn ${pct(ps.shareBps)} if they book.` });
-    return done(Astro, `Sent ${r.data.name} to ${partner.name}. You’ll earn ${pct(ps.shareBps)} of the rental subtotal if they book.`, '/app/growth#overflow');
+    return go(Astro, `/app/growth?done=overflow&to=${partner.id}&name=${encodeURIComponent(r.data.name)}`);
+    }
   }
-  return done(Astro, 'Unknown action.', undefined, 'error');
+  else return done(Astro, 'Unknown action.', undefined, 'error');
 }
 
 const plan = PLANS[t.plan];
@@ -110,10 +118,37 @@ const found = await db.select({ id: schema.tenants.id, name: schema.tenants.name
 const relWith = (otherId: string) => rels.filter((r) => (r.fromTenantId === tenantId && r.toTenantId === otherId) || (r.toTenantId === tenantId && r.fromTenantId === otherId));
 const [sentLeads] = await db.select({ n: sql<number>`count(*)::int`, won: sql<number>`count(*) filter (where ${schema.leads.stage} = 'won')::int` }).from(schema.leads).where(sql`${schema.leads.attribution}->>'utmSource' = ${'partner:' + tenantId}`);
 const [gotLeads] = await db.select({ n: sql<number>`count(*)::int` }).from(schema.leads).where(and(eq(schema.leads.tenantId, tenantId), eq(schema.leads.source, 'partner')));
+const doneKey = Astro.url.searchParams.get('done');
+const doneOther = others.get(Astro.url.searchParams.get('to') ?? Astro.url.searchParams.get('from') ?? '') ?? found.find((o) => o.id === Astro.url.searchParams.get('to'));
 const KIND: Record<string, string> = { referral_commission: 'Referral commission', partner_referral: 'Overflow share' };
 const ST: Record<string, string> = { accrued: 'bg-canvas text-ink-2', payable: 'bg-sun/30 text-[#7A5200]', paid: 'bg-green-50 text-green-800', void: 'bg-red-50 text-red-800' };
 ---
 <AppLayout title="Referrals & Partners" section="growth" subtitle="Get paid for spreading the word, and never turn away a sold-out Saturday again.">
+  <Enhance />
+  {doneKey === 'requested' && (
+    <NextSteps title={`Partnership request sent${doneOther ? ` to ${doneOther.name}` : ''}`} text={`What happens next: they get an email and see your request under Referrals & Partners. Once they accept, you can send them overflow leads from this page — and you earn ${pct(PARTNER_SHARE_BPS)} of the rental subtotal on every one that books.`} dismissHref="/app/growth"
+      actions={[{ href: '#partners', label: 'See pending requests', icon: 'users', primary: true }, { href: '/app/growth?q=#partners', label: 'Invite another partner', icon: 'plus' }]} />
+  )}
+  {doneKey === 'accepted' && (
+    <NextSteps title={`You’re now partners${doneOther ? ` with ${doneOther.name}` : ''}`} text={`When they’re sold out, their customers come to you as leads (source “partner”). You keep the booking; they earn ${pct(PARTNER_SHARE_BPS)} of the subtotal. Want to send them yours too? Request the reverse partnership.`} dismissHref="/app/growth"
+      actions={[{ href: '/app/customers/leads', label: 'Watch for partner leads', icon: 'users', primary: true }, ...(doneOther && !rels.some((r) => r.fromTenantId === tenantId && r.toTenantId === doneOther.id) ? [{ href: '#partners', label: `Request to send leads to ${doneOther.name}`, icon: 'arrow' }] : [])]} />
+  )}
+  {doneKey === 'overflow' && (
+    <NextSteps title={`${(Astro.url.searchParams.get('name') ?? 'Lead').slice(0, 80)} sent${doneOther ? ` to ${doneOther.name}` : ''}`} text={`They got the lead instantly with your name on it. If it turns into a booking, ${pct(PARTNER_SHARE_BPS)} of the rental subtotal is credited to you automatically — watch Earnings below.`} dismissHref="/app/growth"
+      actions={[{ href: '#overflow', label: 'Send another', icon: 'arrow', primary: true }, { href: '#referrals', label: 'View earnings', icon: 'dollar' }]} />
+  )}
+  {doneKey === 'listed' && (
+    <NextSteps title="You’re on the BounceOS marketplace" text={`Families searching ZIPs in your delivery zones can now find you and request quotes. Fee: ${pct(MARKETPLACE_FEE_BPS)} only on bookings the marketplace sends you.`} dismissHref="/app/growth"
+      actions={[{ href: `/find/${t.zip}`, label: 'See your listing', icon: 'external', primary: true, external: true }, { href: '/app/marketing/reviews', label: 'Add reviews to rank higher', icon: 'star' }]} />
+  )}
+  <Guide why="Branch Avenue grows when you grow — so the network pays you: commissions for operators you refer, a share when partners book your overflow, and marketplace leads from families searching your ZIPs.">
+    <li>Share your referral link in operator Facebook groups and with friends running rental companies.</li>
+    <li>Partner with 1–2 nearby operators you trust; overflow only goes where you choose.</li>
+    <li>Always ask the customer before passing their details to a partner.</li>
+    <li>Shares are tracked automatically from the partner’s booking — no spreadsheets.</li>
+    <li>Earnings move from accrued → payable → paid; Branch Avenue pays out monthly.</li>
+    <li>Stay listed on the marketplace to receive quote requests from families near you.</li>
+  </Guide>
   <nav class="flex gap-1 overflow-x-auto mb-5 -mx-1 px-1 text-sm font-semibold" aria-label="Sections">
     {[['#referrals', 'Referral program'], ['#partners', 'Partner network'], ['#overflow', 'Send overflow lead'], ['#marketplace', 'Marketplace listing']].map(([h, l]) => <a href={h} class="whitespace-nowrap rounded-full px-4 py-2 border border-line bg-white text-ink-2 hover:text-ink">{l}</a>)}
   </nav>
@@ -140,8 +175,11 @@ const ST: Record<string, string> = { accrued: 'bg-canvas text-ink-2', payable: '
     <div class="card overflow-hidden">
       <h2 class="font-bold px-4 py-3 border-b border-line">Earnings</h2>
       {earnings.length === 0 ? <p class="p-4 text-sm text-ink-2">No earnings yet. Share your link or send an overflow lead to a partner.</p> : (
-        <div class="overflow-x-auto max-h-80">
-          <table class="table min-w-[480px]">
+        <ul class="sm:hidden divide-y divide-line max-h-80 overflow-y-auto">
+          {earnings.slice(0, 50).map((e) => <li class="px-4 py-2.5 flex items-center gap-2 text-sm"><span class="min-w-0 flex-1"><span class="block font-semibold">{KIND[e.kind] ?? e.kind}</span><span class="block text-xs text-ink-2 truncate">{(e.tenantId && names.get(e.tenantId)) ?? '—'} · {fmtDay(e.createdAt, t.timezone)}</span></span><span class="tabular-nums font-bold">{money(e.amountCents)}</span><span class:list={['chip', ST[e.status]]}>{e.status}</span></li>)}
+        </ul>
+        <div class="overflow-x-auto max-h-80 hidden sm:block">
+          <table class="table">
             <thead><tr><th>Date</th><th>Type</th><th>From</th><th class="text-right">Amount</th><th>Status</th></tr></thead>
             <tbody>{earnings.slice(0, 50).map((e) => <tr><td class="whitespace-nowrap">{fmtDay(e.createdAt, t.timezone)}</td><td>{KIND[e.kind] ?? e.kind}</td><td class="truncate max-w-40">{(e.tenantId && names.get(e.tenantId)) ?? '—'}</td><td class="text-right tabular-nums font-semibold">{money(e.amountCents)}</td><td><span class:list={['chip', ST[e.status]]}>{e.status}</span></td></tr>)}</tbody>
           </table>
@@ -177,7 +215,7 @@ const ST: Record<string, string> = { accrued: 'bg-canvas text-ink-2', payable: '
               <span class="grid place-items-center size-9 rounded-xl bg-canvas shrink-0"><Icon name={out ? 'arrow' : 'gift'} size={16} /></span>
               <span class="flex-1 min-w-40"><strong>{o?.name ?? 'Unknown'}</strong><span class="block text-xs text-ink-2">{out ? `You send them overflow · you earn ${pct(r.shareBps)}` : `They send you overflow · they earn ${pct(r.shareBps)}`} · {o?.city}, {o?.state}</span></span>
               <span class:list={['chip', r.status === 'active' ? 'bg-green-50 text-green-800' : r.status === 'pending' ? 'bg-sun/30 text-[#7A5200]' : 'bg-red-50 text-red-800']}>{r.status === 'pending' ? 'awaiting reply' : r.status}</span>
-              {canEdit && <form method="post" onsubmit="return confirm('End this partnership?')"><input type="hidden" name="_action" value="end" /><input type="hidden" name="id" value={r.id} /><button class="btn-ghost min-h-9 px-3 text-xs">{r.status === 'pending' ? 'Cancel' : 'End'}</button></form>}
+              {canEdit && <form method="post" data-confirm={r.status === 'pending' ? 'Cancel this partnership request?' : `End your partnership with ${o?.name ?? 'this operator'}? Leads stop flowing both ways for this link.`}><input type="hidden" name="_action" value="end" /><input type="hidden" name="id" value={r.id} /><button class="btn-ghost min-h-9 px-3 text-xs">{r.status === 'pending' ? 'Cancel' : 'End'}</button></form>}
             </li>
           );
         })}
@@ -199,7 +237,7 @@ const ST: Record<string, string> = { accrued: 'bg-canvas text-ink-2', payable: '
             <li class="py-2.5 flex items-center gap-2 text-sm">
               <span class="flex-1 min-w-0"><span class="block font-semibold truncate">{o.name}</span><span class="block text-xs text-ink-2">{o.city}, {o.state}{partnerIds.has(o.id) ? ' · partner' : ''}</span></span>
               {mine ? <span class="chip bg-canvas text-ink-2">{mine.status}</span>
-                : canEdit && <form method="post"><input type="hidden" name="_action" value="request" /><input type="hidden" name="to" value={o.id} /><button class="btn-primary min-h-9 px-3 text-xs">Request</button></form>}
+                : canEdit && <form method="post" data-confirm={`Ask ${o.name} to receive your overflow leads? They’ll get an email.`}><input type="hidden" name="_action" value="request" /><input type="hidden" name="to" value={o.id} /><button class="btn-primary min-h-9 px-3 text-xs" data-busy="Sending…">Request</button></form>}
             </li>
           );
         })}
@@ -213,17 +251,17 @@ const ST: Record<string, string> = { accrued: 'bg-canvas text-ink-2', payable: '
       <h2 id="ov-h" class="font-bold text-lg">Send an overflow lead</h2>
       <p class="text-sm text-ink-2 mt-1">Ask the customer first — then pass their details to a partner who has the date open. The partner gets the lead instantly with your name on it.</p>
       {outgoingActive.length === 0 ? <p class="mt-4 rounded-xl bg-canvas p-4 text-sm text-ink-2">You need an active partner first. Request one on the right — once they accept, you can send leads here.</p> : (
-        <form method="post" class="mt-4 grid gap-3 sm:grid-cols-2">
+        <form method="post" class="mt-4 grid gap-3 sm:grid-cols-2" novalidate>
           <input type="hidden" name="_action" value="overflow" />
-          <div class="sm:col-span-2"><label class="label" for="partnershipId">Partner</label><select class="input" id="partnershipId" name="partnershipId">{outgoingActive.map((r) => <option value={r.id}>{others.get(r.toTenantId)?.name} — you earn {pct(r.shareBps)}</option>)}</select></div>
-          <div><label class="label" for="ov-name">Customer name</label><input class="input" id="ov-name" name="name" required maxlength="100" /></div>
-          <div><label class="label" for="ov-date">Event date</label><input class="input" type="date" id="ov-date" name="eventDate" /></div>
-          <div><label class="label" for="ov-email">Email</label><input class="input" type="email" id="ov-email" name="email" maxlength="200" /></div>
-          <div><label class="label" for="ov-phone">Phone</label><input class="input" type="tel" id="ov-phone" name="phone" maxlength="30" /></div>
-          <div><label class="label" for="ov-zip">ZIP</label><input class="input" id="ov-zip" name="zip" inputmode="numeric" maxlength="5" pattern="\d{5}" /></div>
-          <div class="sm:col-span-2"><label class="label" for="ov-msg">What they need</label><textarea class="input" id="ov-msg" name="message" rows="3" maxlength="1000" placeholder="Water slide for 25 kids, backyard, 11am–4pm"></textarea></div>
+          <div class="sm:col-span-2"><label class="label" for="partnershipId">Partner</label><select class="input" id="partnershipId" name="partnershipId">{outgoingActive.map((r) => <option value={r.id} selected={ovValues.partnershipId === r.id}>{others.get(r.toTenantId)?.name} — you earn {pct(r.shareBps)}</option>)}</select></div>
+          <div><label class="label" for="ov-name">Customer name</label><input class="input" id="ov-name" name="name" required maxlength="100" value={ovValues.name} {...invalid(ovErrors, 'name')} aria-describedby={ovErrors.name ? 'name-err' : undefined} />{ovErrors.name && <p id="name-err" class="g-err">{ovErrors.name}</p>}</div>
+          <div><label class="label" for="ov-date">Event date</label><input class="input" type="date" id="ov-date" name="eventDate" value={ovValues.eventDate} {...invalid(ovErrors, 'eventDate')} />{ovErrors.eventDate && <p id="eventDate-err" class="g-err">{ovErrors.eventDate}</p>}</div>
+          <div><label class="label" for="ov-email">Email</label><input class="input" type="email" id="ov-email" name="email" maxlength="200" value={ovValues.email} {...invalid(ovErrors, 'email')} />{ovErrors.email && <p id="email-err" class="g-err">{ovErrors.email}</p>}</div>
+          <div><label class="label" for="ov-phone">Phone</label><input class="input" type="tel" id="ov-phone" name="phone" maxlength="30" value={ovValues.phone} /></div>
+          <div><label class="label" for="ov-zip">ZIP</label><input class="input" id="ov-zip" name="zip" inputmode="numeric" maxlength="5" value={ovValues.zip} {...invalid(ovErrors, 'zip')} />{ovErrors.zip && <p id="zip-err" class="g-err">{ovErrors.zip}</p>}</div>
+          <div class="sm:col-span-2"><label class="label" for="ov-msg">What they need</label><textarea class="input" id="ov-msg" name="message" rows="3" maxlength="1000" placeholder="Water slide for 25 kids, backyard, 11am–4pm">{ovValues.message}</textarea></div>
           <label class="sm:col-span-2 flex gap-2 text-xs text-ink-2"><input type="checkbox" required class="mt-0.5 accent-[var(--color-brand)]" />The customer agreed to be contacted by my partner.</label>
-          <div class="sm:col-span-2"><button class="btn-primary"><Icon name="arrow" size={16} />Send to partner</button></div>
+          <div class="sm:col-span-2"><button class="btn-primary" data-busy="Sending…"><Icon name="arrow" size={16} />Send to partner</button></div>
         </form>
       )}
     </section>
@@ -236,7 +274,7 @@ const ST: Record<string, string> = { accrued: 'bg-canvas text-ink-2', payable: '
         <li class="flex gap-2"><Icon name="check" size={14} class="text-mint shrink-0" />0% on bookings from your own website, ads and socials.</li>
         <li class="flex gap-2"><Icon name="check" size={14} class="text-mint shrink-0" />Listing also lets other operators find you as an overflow partner.</li>
       </ul>
-      <form method="post" class="mt-4 flex items-center gap-3">
+      <form method="post" class="mt-4 flex items-center gap-3" data-no-busy data-confirm={t.marketplaceListed ? 'Hide your business from the marketplace and partner search?' : undefined}>
         <input type="hidden" name="_action" value="listing" /><input type="hidden" name="on" value={t.marketplaceListed ? '0' : '1'} />
         <button role="switch" aria-checked={t.marketplaceListed ? 'true' : 'false'} aria-label="Marketplace listing" disabled={!canEdit} class:list={['relative inline-flex h-8 w-14 items-center rounded-full transition-colors cursor-pointer', t.marketplaceListed ? 'bg-mint' : 'bg-line']}>
           <span class:list={['inline-block size-6 rounded-full bg-white shadow transition-transform', t.marketplaceListed ? 'translate-x-7' : 'translate-x-1']}></span>

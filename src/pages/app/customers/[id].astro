@@ -62,7 +62,7 @@ const bookedTotal = live.reduce((s, b) => s + b.totalCents, 0);
     <a href="/app/customers" class="btn-ghost"><Icon name="arrow" size={16} class="rotate-180" />All customers</a>
     {canManage && <a href={`/app/bookings/new?customerId=${c.id}`} class="btn-ghost"><Icon name="plus" size={16} />Book again</a>}
   </Fragment>
-  <Crumbs items={[{ label: 'Customers', href: '/app/customers' }, { label: c.name || c.email }]} />
+  <Crumbs slot="crumbs" items={[{ label: 'Customers', href: '/app/customers' }, { label: c.name || c.email }]} />
 
   <section class="grid grid-cols-2 md:grid-cols-4 gap-3 mb-6" aria-label="Customer numbers">
     <div class="kpi"><p class="kpi-label">Lifetime value</p><p class="kpi-value">{money(c.lifetimeValueCents)}</p></div>

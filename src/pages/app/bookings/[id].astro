@@ -124,7 +124,7 @@ const linkForm = { _action: 'notify', kind: 'link', channel: c?.phone ? 'sms' : 
     <a href={`/app/deliveries?day=${day}`} class="btn-ghost"><Icon name="truck" size={16} />Route day</a>
   </Fragment>
 
-  <Crumbs items={[{ label: 'Bookings', href: '/app/bookings' }, ...(c ? [{ label: c.name || c.email, href: `/app/customers/${c.id}` }] : []), { label: `#${b.number}` }]} />
+  <Crumbs slot="crumbs" items={[{ label: 'Bookings', href: '/app/bookings' }, ...(c ? [{ label: c.name || c.email, href: `/app/customers/${c.id}` }] : []), { label: `#${b.number}` }]} />
   {done === 'created' && (
     <NextSteps title={`${b.status === 'quote' ? 'Quote' : 'Booking'} #${b.number} is on the books`} text={`${money(b.totalCents)} for ${c?.name ?? 'your customer'} on ${dayTitle(day, today)}. Inventory is reserved${b.status === 'quote' ? ' once they accept' : ''}.`} celebrate={b.status === 'confirmed'} dismiss={self}
       actions={[

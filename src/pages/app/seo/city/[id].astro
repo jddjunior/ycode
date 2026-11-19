@@ -65,7 +65,7 @@ const nextThin = others.find((o) => o.id !== id && !((o.local?.neighborhoods?.le
   <a slot="actions" href={`/app/website/pages/${page.id}`} class="btn-ghost"><Icon name="globe" size={16} />Edit blocks</a>
   <a slot="actions" href={origin + pagePath('city', page.slug)} target="_blank" rel="noopener" class="btn-ghost"><Icon name="external" size={16} />Preview</a>
   <Enhance />
-  <Crumbs items={[{ label: 'SEO', href: '/app/seo' }, { label: 'City pages', href: '/app/seo#generator' }, { label: `${local.city}, ${local.state}` }]} />
+  <Crumbs slot="crumbs" items={[{ label: 'SEO', href: '/app/seo' }, { label: 'City pages', href: '/app/seo#generator' }, { label: `${local.city}, ${local.state}` }]} />
   {doneKey === 'saved' && (
     <NextSteps title={`${local.city} page updated — ${n} local fact${n === 1 ? '' : 's'}`} text={n >= 4 ? 'That’s the kind of detail that helps a city page rank and convert.' : 'Good start. Aim for 4+ neighborhoods, parks or venues.'} dismissHref={`/app/seo/city/${id}`}
       actions={[

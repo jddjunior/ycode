@@ -110,7 +110,7 @@ const landingPaths = [...new Set(camp.creative.adGroups.map((g) => { try { retur
 <AppLayout title={camp.name} section="ads" subtitle={`${camp.network === 'google' ? 'Google Search' : 'Meta'} · ${camp.cities.join(', ')} · ${camp.status.replace('_', ' ')}`} wide>
   {camp.network === 'google' && <a slot="actions" href={`/api/app/ads/${camp.id}.csv`} class="btn-primary" download><Icon name="arrow" size={16} />Google Ads Editor CSV</a>}
   <Enhance />
-  <Crumbs items={[{ label: 'Ads', href: '/app/ads' }, { label: camp.name }]} />
+  <Crumbs slot="crumbs" items={[{ label: 'Ads', href: '/app/ads' }, { label: camp.name }]} />
   {doneKey === 'created' && (
     <NextSteps title={`Built ${camp.creative.adGroups.length} ad group${camp.creative.adGroups.length === 1 ? '' : 's'} with ${camp.creative.adGroups.reduce((s, g) => s + g.headlines.length, 0)} headlines`} text={issues.length ? `${issues.length} thing${issues.length === 1 ? '' : 's'} to fix before launch — see below.` : 'Every headline and description fits Google’s limits. Review the copy below, then launch it your way.'} dismissHref={`/app/ads/${id}`}
       actions={[

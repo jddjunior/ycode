@@ -108,7 +108,7 @@ const props: BuilderProps = {
 ---
 <AppLayout title="New booking" section="bookings" subtitle="Phone order or quote — live availability and pricing as you build it." wide>
   <Fragment slot="actions"><a href="/app/bookings" class="btn-ghost">Cancel</a></Fragment>
-  <Crumbs items={[{ label: 'Bookings', href: '/app/bookings' }, { label: 'New booking' }]} />
+  <Crumbs slot="crumbs" items={[{ label: 'Bookings', href: '/app/bookings' }, { label: 'New booking' }]} />
   {prefill.leadId && <p class="mb-4 rounded-xl bg-brand-soft/60 border border-brand/20 px-4 py-3 text-sm"><strong>Converting a lead.</strong> We prefilled what they told us — saving marks the lead {`“won”`} (or “quoted” if you save a quote). <a href="/app/customers/leads" class="text-brand font-semibold">Back to leads</a></p>}
   <Help benefit="Take a phone order in under a minute with the same live availability and pricing your website uses — no double-bookings, no math.">
     <ul>

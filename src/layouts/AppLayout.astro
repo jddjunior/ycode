@@ -108,6 +108,7 @@ const trialDays = t.status === 'trial' && t.trialEndsAt ? Math.max(0, Math.ceil(
             <Icon name={flash.kind === 'ok' ? 'check' : 'x'} size={16} />{flash.msg}
           </div>
         )}
+        <slot name="crumbs" />
         <div class="flex flex-wrap items-end gap-3 mb-6">
           <div class="min-w-0">
             <h1 class="text-2xl lg:text-3xl font-extrabold">{title}</h1>

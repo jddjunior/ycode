@@ -43,12 +43,12 @@ const initials = (n: string) => n.split(/\s+/).map((p) => p[0]).join('').slice(0
       <li>LTV counts every payment received, including cash and checks.</li>
     </ul>
   </Help>
-  <form method="get" class="card p-3 grid gap-3 sm:grid-cols-[1fr_180px_160px_auto] items-end">
-    <div><label class="label" for="q">Search</label><input id="q" name="q" type="search" class="input" placeholder="Name, email, phone or organization" value={search} /></div>
+  <form method="get" class="card p-3 grid grid-cols-2 gap-3 sm:grid-cols-[1fr_180px_160px_auto] items-end">
+    <div class="col-span-2 sm:col-span-1"><label class="label" for="q">Search</label><input id="q" name="q" type="search" class="input" placeholder="Name, email, phone or organization" value={search} /></div>
     <div><label class="label" for="type">Type</label><select id="type" name="type" class="input"><option value="">All types</option>{CUSTOMER_TYPES.map((x) => <option value={x} selected={x === type} class="capitalize">{x[0].toUpperCase() + x.slice(1)}</option>)}</select></div>
     <div><label class="label" for="sort">Sort</label><select id="sort" name="sort" class="input"><option value="ltv" selected={sort === 'ltv'}>Lifetime value</option><option value="recent" selected={sort === 'recent'}>Newest</option><option value="name" selected={sort === 'name'}>Name</option></select></div>
     {tag && <input type="hidden" name="tag" value={tag} />}
-    <button class="btn-primary"><Icon name="search" size={16} />Filter</button>
+    <button class="btn-primary col-span-2 sm:col-span-1"><Icon name="search" size={16} />Filter</button>
   </form>
   {allTags.length > 0 && (
     <div class="flex flex-wrap gap-1.5 mt-3" aria-label="Filter by tag">

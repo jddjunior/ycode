@@ -29,7 +29,7 @@ const groups = [
 const current = groups.flatMap((g) => g.items).find((i) => i.k === active);
 ---
 <AppLayout title={title} section="settings" subtitle={subtitle} wide>
-  <Crumbs items={[{ label: 'Settings', href: '/app/settings' }, { label: current?.label ?? title }]} />
+  <Crumbs slot="crumbs" items={[{ label: 'Settings', href: '/app/settings' }, { label: current?.label ?? title }]} />
   <div class="grid gap-6 lg:grid-cols-[220px_minmax(0,1fr)]">
     <nav aria-label="Settings sections" class="lg:sticky lg:top-20 self-start">
       <div class="lg:hidden">

@@ -87,7 +87,7 @@ const smsLen = values.body.length + 25;
 <AppLayout title={camp.name} section="marketing" subtitle={`${camp.channel.toUpperCase()} · ${isAuto ? 'Automation' : segmentLabel(camp.segment)} · ${camp.status}${camp.status === 'scheduled' ? ' for ' + fmtDateTime(camp.scheduledAt, t.timezone) : ''}`}>
   {canEdit && !isAuto && <a slot="actions" href={`/app/marketing?followup=${camp.id}#new-campaign`} class="btn-ghost"><Icon name="plus" size={16} />Follow-up</a>}
   <Enhance />
-  <Crumbs items={[{ label: 'Campaigns & Reviews', href: '/app/marketing' }, { label: isAuto ? 'Automations' : 'Broadcasts', href: isAuto ? '/app/marketing#automations' : '/app/marketing' }, { label: camp.name }]} />
+  <Crumbs slot="crumbs" items={[{ label: 'Campaigns & Reviews', href: '/app/marketing' }, { label: isAuto ? 'Automations' : 'Broadcasts', href: isAuto ? '/app/marketing#automations' : '/app/marketing' }, { label: camp.name }]} />
 
   {doneKey === 'created' && <NextSteps celebrate={false} title="Draft created — now write the message" text={`It will go to ${recipients.length} opted-in customer${recipients.length === 1 ? '' : 's'}. Check the preview on the right, then send now or schedule.`} dismissHref={`/app/marketing/${id}`} actions={[{ href: '#body', label: 'Write the message', icon: 'message', primary: true }, { href: '#segment', label: 'Change who gets it', icon: 'users' }]} />}
   {doneKey === 'sent' && (

@@ -45,7 +45,7 @@ if (f) {
 ---
 <AppLayout title="Add item" section="inventory" subtitle="Rentals, add-ons and money-saving packages." wide>
   <Fragment slot="actions"><a href="/app/inventory" class="btn-ghost">Cancel</a></Fragment>
-  <Crumbs items={[{ label: 'Inventory', href: '/app/inventory' }, { label: 'Add item' }]} />
+  <Crumbs slot="crumbs" items={[{ label: 'Inventory', href: '/app/inventory' }, { label: 'Add item' }]} />
   <Help benefit="Every item you add appears on your website with real-time availability and SEO-ready pages — and you’re never charged per item.">
     <ul>
       <li><strong>Rentals</strong> are your inflatables, tents and games. <strong>Add-ons</strong> are extras like generators and concessions offered at checkout. <strong>Packages</strong> bundle items at a set price and reserve each component.</li>

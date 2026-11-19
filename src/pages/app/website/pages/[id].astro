@@ -76,7 +76,7 @@ const city = page.local?.city;
     {page.status === 'published' ? (!isHome && <button class="btn-ghost" data-confirm="Unpublish this page? It will disappear from your site.">Unpublish</button>) : <button class="btn-pop" data-busy="Publishing…"><Icon name="bolt" size={16} />Publish</button>}
   </form>}
   <Enhance />
-  <Crumbs items={[{ label: 'Website', href: '/app/website' }, { label: KIND_LABEL[page.kind], href: `/app/website?kind=${page.kind}` }, { label: page.title }]} />
+  <Crumbs slot="crumbs" items={[{ label: 'Website', href: '/app/website' }, { label: KIND_LABEL[page.kind], href: `/app/website?kind=${page.kind}` }, { label: page.title }]} />
 
   {doneKey === 'created' && (
     <NextSteps title="Draft created" text="It’s hidden until you publish. We’ve added starter blocks — edit the text below, then publish when it reads well." dismissHref={`/app/website/pages/${id}`}
