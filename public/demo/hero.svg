@@ -1,0 +1,13 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 800 600" role="img"><defs><linearGradient id="sky" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#BDE7FF"/><stop offset="1" stop-color="#FFF7E6"/></linearGradient></defs><rect width="800" height="600" fill="url(#sky)"/><ellipse cx="400" cy="560" rx="520" ry="90" fill="#7BC96F"/><circle cx="680" cy="90" r="46" fill="#FFD43B" opacity=".9"/><g><rect x="200" y="250" width="400" height="240" rx="26" fill="#2563EB"/>
+  <rect x="230" y="300" width="340" height="170" rx="18" fill="#ffffff" opacity=".85"/>
+  <path d="M230 300 h340 v40 h-340z" fill="#FFC928" opacity=".9"/>
+  <rect x="238" y="340" width="10" height="130" rx="5" fill="#FF5A1F" opacity=".55"/><rect x="286" y="340" width="10" height="130" rx="5" fill="#FF5A1F" opacity=".55"/><rect x="334" y="340" width="10" height="130" rx="5" fill="#FF5A1F" opacity=".55"/><rect x="382" y="340" width="10" height="130" rx="5" fill="#FF5A1F" opacity=".55"/><rect x="430" y="340" width="10" height="130" rx="5" fill="#FF5A1F" opacity=".55"/><rect x="478" y="340" width="10" height="130" rx="5" fill="#FF5A1F" opacity=".55"/><rect x="526" y="340" width="10" height="130" rx="5" fill="#FF5A1F" opacity=".55"/>
+  <rect x="170" y="190" width="60" height="300" rx="28" fill="#FF5A1F"/><circle cx="200" cy="185" r="34" fill="#FFC928"/><rect x="570" y="190" width="60" height="300" rx="28" fill="#FF5A1F"/><circle cx="600" cy="185" r="34" fill="#FFC928"/>
+  <path d="M300 250 q100 -110 200 0" fill="#FF5A1F"/>
+  <rect x="180" y="480" width="440" height="40" rx="18" fill="#FF5A1F"/>
+  <path d="M300 520 h200 l40 30 h-280z" fill="#FFC928" opacity=".8"/></g><g transform="translate(470 120) scale(.55)"><g><path d="M150 520 L330 150 h110 L640 520z" fill="#22A559"/>
+  <path d="M250 520 L360 190 h50 L520 520z" fill="#FFC928"/>
+  <path d="M262 520 L368 200" stroke="#fff" stroke-width="8" opacity=".5"/><path d="M328 520 L380 200" stroke="#fff" stroke-width="8" opacity=".5"/><path d="M394 520 L392 200" stroke="#fff" stroke-width="8" opacity=".5"/><path d="M460 520 L404 200" stroke="#fff" stroke-width="8" opacity=".5"/>
+  <rect x="310" y="110" width="150" height="60" rx="26" fill="#2563EB"/>
+  <rect x="120" y="500" width="560" height="50" rx="24" fill="#3BB3E8"/>
+  <path d="M180 520 q30 -25 60 0 t60 0 t60 0 t60 0 t60 0 t60 0 t60 0" stroke="#fff" stroke-width="6" fill="none" opacity=".8"/></g></g></svg>
