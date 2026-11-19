@@ -1,0 +1,190 @@
+---
+/** Product detail (research §7.2 order): gallery, sticky buy box w/ live date check, specs, fit helper, add-ons, included, safety, reviews, FAQ, delivered-to, similar. */
+import SiteLayout from '../../layouts/SiteLayout.astro';
+import Breadcrumbs from './Breadcrumbs.astro';
+import ProductCard from './ProductCard.astro';
+import ReviewCard from './ReviewCard.astro';
+import Stars from './Stars.astro';
+import Faq from './blocks/Faq.astro';
+import Icon from '../Icon.astro';
+import AvailabilityChecker from '../../islands/site/AvailabilityChecker';
+import FitCheck from '../../islands/site/FitCheck';
+import type { SiteCtx, Item } from '../../lib/site/data';
+import { bookableDays, depositText, firstImage, hourLabel, itemFacts, packageSavings } from '../../lib/site/data';
+import { breadcrumbLd, itemTitle, productLd } from '../../lib/seo';
+import { money } from '../../lib/pricing';
+
+interface Props { ctx: SiteCtx; item: Item }
+const { ctx, item } = Astro.props;
+const t = ctx.tenant;
+const { s, area } = itemFacts(item);
+const cat = item.categoryId ? ctx.catById.get(item.categoryId) : null;
+const isPkg = item.kind === 'package';
+const pkg = isPkg ? packageSavings(item, ctx.itemById) : null;
+const d = bookableDays(t);
+const addons = item.upsellIds.map((id) => ctx.itemById.get(id)).filter((x): x is Item => !!x && x.kind === 'addon').slice(0, 4);
+const similar = ctx.items.filter((i) => i.id !== item.id && i.kind === item.kind && (i.categoryId === item.categoryId || i.isWet === item.isWet)).slice(0, 4);
+const inPackages = ctx.items.filter((i) => i.kind === 'package' && i.bundle.some((b) => b.itemId === item.id));
+const words = item.name.toLowerCase().split(/\W+/).filter((w) => w.length > 3);
+const reviews = [...ctx.reviews].sort((a, b) => Number(words.some((w) => b.body.toLowerCase().includes(w))) - Number(words.some((w) => a.body.toLowerCase().includes(w)))).slice(0, 3);
+const kindLabel = cat?.name.replace(/s$/, '') ?? (isPkg ? 'Party package' : 'Rental');
+const title = `${itemTitle(item, t.city, t.state)} — ${money(item.priceCents)}`;
+const desc = item.seoDescription ?? `${item.tagline || item.name}. ${money(item.priceCents)} for up to ${item.baseHours} hours in ${t.city} — delivery, setup & pickup included. Check your date live and book online in 2 minutes.`;
+const url = ctx.abs(ctx.itemPath(item));
+const crumbs = [{ name: 'Rentals', path: '/rentals' }, isPkg ? { name: 'Packages', path: '/rentals/packages' } : cat ? { name: cat.name, path: `/rentals/${cat.slug}` } : null, { name: item.name, path: ctx.itemPath(item) }].filter((x): x is { name: string; path: string } => !!x);
+const surfaces = s.surfaces ?? [];
+const SURF: Record<string, string> = { grass: 'Grass', concrete: 'Concrete', asphalt: 'Asphalt', indoor: 'Indoor' };
+const specs = [
+  s.lengthFt && s.widthFt ? ['Size (L × W × H)', `${s.lengthFt} × ${s.widthFt}${s.heightFt ? ` × ${s.heightFt}` : ''} ft`] : null,
+  area ? ['Setup area needed', `${area.w} × ${area.l} ft flat, clear space`] : null,
+  s.heightFt ? ['Overhead clearance', `${s.heightFt + 2} ft (no branches or wires)`] : null,
+  s.ageRange ? ['Ages', s.ageRange] : null,
+  s.maxRiders ? ['Max riders', `${s.maxRiders} at a time, similar size`] : null,
+  s.maxWeightLbs ? ['Weight limit', `${s.maxWeightLbs} lbs total`] : null,
+  s.outlets != null ? ['Power', s.outlets ? `${s.outlets} standard outlet${s.outlets > 1 ? 's' : ''} (separate circuits) within 50 ft${s.blowers ? ` · ${s.blowers} blower${s.blowers > 1 ? 's' : ''}` : ''}` : 'No power needed'] : null,
+  item.isWet ? ['Water', 'Garden hose within 50 ft · use wet or dry'] : ['Wet or dry', 'Dry use — great any season'],
+  surfaces.length ? ['Surfaces', surfaces.map((x) => SURF[x] ?? x).join(', ')] : null,
+  s.material ? ['Material', s.material] : null,
+].filter((x): x is string[] => !!x);
+const faqs = [
+  area && { q: `How much space does the ${item.name} need?`, a: `Plan for a flat area about ${area.w} × ${area.l} ft with nothing overhead${s.heightFt ? ` for at least ${s.heightFt + 2} ft` : ''}. Use the “Will it fit?” check above, or text us a photo of your yard.` },
+  s.outlets != null && { q: 'Does it need power?', a: s.outlets ? `Yes — ${s.outlets} standard 110v outlet${s.outlets > 1 ? 's on separate circuits' : ''} within 50 ft. No outlet nearby? Add a quiet generator at checkout.` : 'No power is needed.' },
+  surfaces.length && { q: 'Can it go on concrete or indoors?', a: surfaces.includes('concrete') || surfaces.includes('indoor') ? `Yes. It’s rated for ${surfaces.map((x) => SURF[x] ?? x).join(', ').toLowerCase()}. On hard surfaces we anchor with sandbags instead of stakes.` : 'This unit is grass-only — it must be staked into the ground.' },
+  { q: 'What’s included in the price?', a: `${money(item.priceCents)} covers up to ${item.baseHours} hours${item.extraHourCents ? ` (extra hours ${money(item.extraHourCents)}/hr)` : ''}, delivery in our local zone, setup, anchoring, a safety walkthrough, pickup and cleaning.` },
+  { q: 'How much is the deposit?', a: `${depositText(t, money)}. The balance is due on delivery. ${t.settings?.cancellationPolicy ?? ''}` },
+].filter((x): x is { q: string; a: string } => !!x);
+const ld = [productLd(item, ctx.origin, url, t), breadcrumbLd([{ name: 'Home', url: ctx.abs('/') }, ...crumbs.map((c) => ({ name: c.name, url: ctx.abs(c.path) }))])];
+---
+<SiteLayout ctx={ctx} title={title} description={desc} image={firstImage(item)} ld={ld}>
+  <div class="s-wrap pt-6 pb-12">
+    <Breadcrumbs crumbs={[{ name: 'Home', href: ctx.href('/') }, ...crumbs.map((c) => ({ name: c.name, href: ctx.href(c.path) }))]} />
+    <div class="mt-5 grid lg:grid-cols-[1.15fr_.85fr] gap-8 lg:gap-12 items-start">
+      <div class="min-w-0 grid gap-10">
+        <div>
+          <div class="relative s-card overflow-hidden !rounded-[calc(var(--r-card)*1.3)]">
+            <div class="flex overflow-x-auto snap-x snap-mandatory" aria-label="Photos">
+              {(item.images.length ? item.images : ['/demo/hero.svg']).map((src, i) => (
+                <img src={src} alt={`${item.name}${i ? ` photo ${i + 1}` : ' set up and ready for a party'}`} width="800" height="600" class="w-full shrink-0 snap-center aspect-[4/3] object-cover bg-muted" loading={i ? 'lazy' : 'eager'} fetchpriority={i ? undefined : 'high'} />
+              ))}
+            </div>
+            <div class="absolute top-4 left-4 flex gap-2">
+              {item.isWet ? <span class="s-chip s-chip-wet">💧 Wet or dry</span> : <span class="s-chip">☀️ Dry unit</span>}
+              {pkg && pkg.savingsCents > 0 && <span class="s-chip s-chip-warn">Save {money(pkg.savingsCents)}</span>}
+            </div>
+          </div>
+          {item.images.length > 1 && <p class="mt-2 text-xs s-sub font-semibold">Swipe for {item.images.length} photos</p>}
+        </div>
+
+        <section>
+          <h2 class="s-h2 !text-3xl">About the {item.name}</h2>
+          <p class="s-lede mt-3">{item.description}</p>
+        </section>
+
+        {pkg && (
+          <section>
+            <h2 class="s-h3 !text-xl">What’s in this package</h2>
+            <ul class="mt-4 grid sm:grid-cols-2 gap-3">
+              {pkg.parts.map((x) => (
+                <li><a href={ctx.href(ctx.itemPath(x.item))} class="s-card p-3 flex gap-3 items-center hover:border-[var(--c-primary)]">
+                  <img src={firstImage(x.item)} alt="" width="96" height="72" loading="lazy" class="w-20 h-[60px] rounded-lg object-cover" />
+                  <span class="text-sm"><span class="font-extrabold block">{x.qty > 1 ? `${x.qty} × ` : ''}{x.item.name}</span><span class="s-sub">{money(x.item.priceCents)} on its own</span></span>
+                </a></li>
+              ))}
+            </ul>
+            {pkg.savingsCents > 0 && <p class="mt-3 font-bold">Bought separately: <span class="line-through">{money(pkg.listCents)}</span> → package {money(item.priceCents)}. You save {money(pkg.savingsCents)}.</p>}
+          </section>
+        )}
+
+        {specs.length > 0 && (
+          <section>
+            <h2 class="s-h3 !text-xl">Specs & setup requirements</h2>
+            <dl class="mt-4 grid sm:grid-cols-2 gap-px bg-line rounded-[var(--r-card)] overflow-hidden border border-line">
+              {specs.map(([k, v]) => <div class="bg-white p-4"><dt class="text-xs font-extrabold uppercase tracking-wider s-sub">{k}</dt><dd class="mt-1 font-bold">{v}</dd></div>)}
+            </dl>
+          </section>
+        )}
+
+        {area && (
+          <section class="s-tile p-5 sm:p-6">
+            <h2 class="s-h3 !text-xl flex items-center gap-2"><Icon name="target" size={20} /> Will it fit?</h2>
+            <p class="text-sm s-sub mt-1 mb-4">Measure your flattest open area with a tape measure or count big steps (1 step ≈ 3 ft).</p>
+            <FitCheck client:visible name={item.name} needW={area.w} needL={area.l} heightFt={s.heightFt} surfaces={surfaces} />
+          </section>
+        )}
+
+        <section class="grid sm:grid-cols-2 gap-4">
+          <div class="s-card p-5">
+            <h2 class="s-h3">What’s included</h2>
+            <ul class="mt-3 grid gap-2 text-sm font-semibold">
+              {['Delivery & pickup', 'Professional setup & anchoring (stakes or sandbags)', 'Blower, cords & ground tarp', 'Safety walkthrough with an adult', 'Cleaned & sanitized before your event', `Up to ${item.baseHours} hours of fun`].map((x) => <li class="flex gap-2"><span class="text-primary" aria-hidden="true"><Icon name="check" size={18} /></span>{x}</li>)}
+            </ul>
+          </div>
+          <div class="s-card p-5">
+            <h2 class="s-h3">Safety rules</h2>
+            <ul class="mt-3 grid gap-2 text-sm font-semibold">
+              {['An adult supervises at all times', s.maxRiders ? `Max ${s.maxRiders} riders, grouped by size` : 'Group riders by similar size', item.isWet || /slide/i.test(item.name) ? 'One rider per slide lane, feet first' : 'No flips, wrestling or climbing walls', 'No shoes, food, drinks or sharp objects', `Exit immediately in winds over ${t.settings?.windLimitMph ?? 15} mph, rain or lightning`].map((x) => <li class="flex gap-2"><span class="text-primary" aria-hidden="true"><Icon name="shield" size={18} /></span>{x}</li>)}
+            </ul>
+          </div>
+        </section>
+      </div>
+
+      <aside class="lg:sticky lg:top-24 order-first lg:order-none" aria-label="Book this rental">
+        <div class="s-card p-5 sm:p-6">
+          <p class="text-xs font-extrabold uppercase tracking-wider s-sub">{kindLabel}{s.ageRange ? ` · ages ${s.ageRange}` : ''}</p>
+          <h1 class="font-display text-[1.9rem] sm:text-[2.2rem] font-bold leading-[1.05] mt-1.5">{item.name}</h1>
+          {item.tagline && <p class="s-sub mt-2">{item.tagline}</p>}
+          {ctx.rating.count > 0 && <p class="mt-2 text-sm font-bold flex items-center gap-2"><Stars rating={ctx.rating.avg} /> {ctx.rating.avg.toFixed(1)} · {ctx.rating.count} reviews</p>}
+          <p class="mt-4 flex items-baseline gap-2 flex-wrap">
+            <span class="s-price text-4xl">{money(item.priceCents)}</span>
+            <span class="text-sm font-bold s-sub">per event · up to {item.baseHours} hrs</span>
+          </p>
+          <p class="text-xs font-semibold s-sub mt-1">
+            {item.extraHourCents ? `Extra hours ${money(item.extraHourCents)}/hr. ` : ''}{item.overnightCents ? `Overnight ${money(item.overnightCents)}. ` : ''}Typical window {hourLabel(d.defaultStart)}–{hourLabel(d.defaultEnd)}.
+          </p>
+          <div class="mt-5">
+            <AvailabilityChecker client:load mode="item" slug={t.slug} api={ctx.api} base={ctx.base} idPrefix="buy" phone={t.phone || undefined}
+              minDay={d.minDay} maxDay={d.maxDay} defaultStart={d.defaultStart} defaultEnd={d.defaultEnd}
+              item={{ id: item.id, name: item.name, priceCents: item.priceCents, baseHours: item.baseHours, extraHourCents: item.extraHourCents, quantity: item.quantity }}
+              addons={addons.map((a) => ({ id: a.id, name: a.name, priceCents: a.priceCents, image: firstImage(a) }))}
+              depositText={depositText(t, money)} />
+          </div>
+        </div>
+        <ul class="mt-4 grid grid-cols-3 gap-2 text-center text-xs font-bold">
+          <li class="s-tile p-3"><Icon name="truck" size={20} class="mx-auto mb-1 text-primary" />Setup included</li>
+          <li class="s-tile p-3"><Icon name="sparkle" size={20} class="mx-auto mb-1 text-primary" />Sanitized</li>
+          <li class="s-tile p-3"><Icon name="cloud" size={20} class="mx-auto mb-1 text-primary" />Weather-safe</li>
+        </ul>
+      </aside>
+    </div>
+  </div>
+
+  {inPackages.length > 0 && !isPkg && (
+    <section class="s-wrap pb-12">
+      <h2 class="s-h2 !text-3xl">Bundle it & save</h2>
+      <div class="mt-6 grid grid-cols-1 min-[480px]:grid-cols-2 lg:grid-cols-3 gap-4">{inPackages.map((p) => <ProductCard ctx={ctx} item={p} />)}</div>
+    </section>
+  )}
+
+  {reviews.length > 0 && (
+    <section class="s-wrap pb-12">
+      <h2 class="s-h2 !text-3xl">Reviews from {t.city} families</h2>
+      <div class="mt-6 grid md:grid-cols-3 gap-4">{reviews.map((r) => <ReviewCard review={r} />)}</div>
+    </section>
+  )}
+
+  <Faq props={{ title: `${item.name} FAQ` }} faqs={faqs} />
+
+  {ctx.cities.length > 0 && (
+    <section class="s-wrap pb-12">
+      <h2 class="s-h3 !text-xl">Delivered to</h2>
+      <ul class="mt-3 flex flex-wrap gap-2">{ctx.cities.map((c) => <li><a class="s-filter" href={ctx.href(`/areas/${c.slug}`)}>{c.local?.city ?? c.title}</a></li>)}</ul>
+    </section>
+  )}
+
+  {similar.length > 0 && (
+    <section class="s-wrap pb-20">
+      <h2 class="s-h2 !text-3xl">Similar rentals</h2>
+      <div class="mt-6 grid grid-cols-1 min-[480px]:grid-cols-2 lg:grid-cols-4 gap-4">{similar.map((x) => <ProductCard ctx={ctx} item={x} />)}</div>
+    </section>
+  )}
+</SiteLayout>

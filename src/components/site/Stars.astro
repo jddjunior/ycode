@@ -1,0 +1,6 @@
+---
+interface Props { rating: number; size?: string; label?: boolean }
+const { rating, size = 'text-base', label = true } = Astro.props;
+const full = Math.round(rating);
+---
+<span class={`s-stars ${size}`} role="img" aria-label={`${rating.toFixed(1)} out of 5 stars`}>{'★'.repeat(full)}<span class="opacity-30">{'★'.repeat(5 - full)}</span></span>{label && <span class="sr-only">{rating.toFixed(1)} stars</span>}

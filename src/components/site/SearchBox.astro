@@ -1,0 +1,11 @@
+---
+/** Date + time + ZIP availability search (SSR form, hydrated for live results). */
+import AvailabilityChecker from '../../islands/site/AvailabilityChecker';
+import type { SiteCtx } from '../../lib/site/data';
+import { bookableDays } from '../../lib/site/data';
+interface Props { ctx: SiteCtx; id: string; layout?: 'bar' | 'stack'; submitLabel?: string; initial?: { day?: string; startHour?: number; endHour?: number; zip?: string } }
+const { ctx, id, layout = 'bar', submitLabel, initial } = Astro.props;
+const d = bookableDays(ctx.tenant);
+---
+<AvailabilityChecker client:visible mode="search" slug={ctx.tenant.slug} api={ctx.api} base={ctx.base} idPrefix={id}
+  minDay={d.minDay} maxDay={d.maxDay} defaultStart={d.defaultStart} defaultEnd={d.defaultEnd} layout={layout} submitLabel={submitLabel} initial={initial} />

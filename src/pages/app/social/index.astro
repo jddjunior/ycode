@@ -1,0 +1,293 @@
+---
+import { and, asc, desc, eq, gte, inArray, lt, sql } from 'drizzle-orm';
+import { z } from 'zod';
+import AppLayout from '../../../layouts/AppLayout.astro';
+import Icon from '../../../components/Icon.astro';
+import { getDb, schema } from '../../../db/client';
+import { formData, str } from '../../../lib/forms';
+import { generateCaptions } from '../../../lib/ai';
+import { siteOrigin } from '../../../lib/tenant';
+import { localDay, addDays, formatLocal } from '../../../lib/time';
+import { NETWORKS, ADAPTERS, connectedNetworks, publishPost, type Network } from '../../../lib/growth/social';
+import { ctx, done, fmtDateTime, parseLocalDateTime, toLocalInput } from '../../../lib/growth/app';
+
+const { t, tenantId, canEdit } = ctx(Astro);
+const db = await getDb();
+const origin = await siteOrigin(t);
+const items = await db.select({ id: schema.items.id, name: schema.items.name, tagline: schema.items.tagline, images: schema.items.images, slug: schema.items.slug, isWet: schema.items.isWet, featured: schema.items.featured })
+  .from(schema.items).where(and(eq(schema.items.tenantId, tenantId), eq(schema.items.active, true))).orderBy(desc(schema.items.featured), asc(schema.items.sort), asc(schema.items.name));
+const itemById = new Map(items.map((i) => [i.id, i]));
+const OCCASIONS = ['weekend availability', 'birthday parties', 'school field day', 'church festival', 'summer water slide season', 'block party', 'corporate picnic', 'graduation party'];
+const linkFor = (itemSlug?: string, net = 'social') => `${origin}${itemSlug ? `/rentals/${itemSlug}` : '/'}?utm_source=${net}&utm_medium=organic_social`;
+const netKeys = NETWORKS.map((n) => n.key) as [Network, ...Network[]];
+
+const Post = z.object({
+  caption: z.string().min(5, 'Write a caption').max(2200),
+  networks: z.array(z.enum(netKeys)).min(1, 'Pick at least one network').max(4),
+  imageUrl: z.string().max(500).refine((s) => s === '' || /^(\/[\w\-./%]*|https:\/\/[^\s"'<>]+)$/.test(s), 'Image must be a /path or https:// URL'),
+  itemId: z.union([z.literal(''), z.uuid()]),
+});
+
+let generated: string[] = [];
+let draft = { itemId: Astro.url.searchParams.get('item') ?? '', occasion: Astro.url.searchParams.get('occasion') ?? 'weekend availability', tone: 'fun', caption: '', imageUrl: '', networks: ['facebook', 'instagram', 'gbp'] as string[] };
+if (draft.itemId && !itemById.has(draft.itemId)) draft.itemId = '';
+if (draft.itemId) draft.imageUrl = itemById.get(draft.itemId)!.images[0] ?? '';
+
+const f = await formData(Astro);
+if (f) {
+  if (!canEdit) return done(Astro, 'Only owners and managers can post.', undefined, 'error');
+  const action = str(f, '_action', 20);
+  if (action === 'generate') {
+    // Non-mutating: render the composer with fresh captions (no redirect).
+    const itemId = str(f, 'itemId', 40);
+    const item = itemById.get(itemId);
+    const occasion = str(f, 'occasion', 60) || 'your next party';
+    const tone = (['fun', 'helpful', 'urgent'] as const).find((x) => x === str(f, 'tone', 10)) ?? 'fun';
+    generated = await generateCaptions({ business: t.name, city: t.city, itemName: item?.name, itemTagline: item?.tagline || undefined, occasion, tone, link: linkFor(item?.slug) });
+    draft = { ...draft, itemId: item?.id ?? '', occasion, tone, caption: generated[0] ?? '', imageUrl: item?.images[0] ?? '' };
+  } else if (action === 'save' || action === 'schedule') {
+    const r = Post.safeParse({ caption: str(f, 'caption', 2200), networks: [...new Set(f.getAll('networks').map(String))], imageUrl: str(f, 'imageUrl', 500), itemId: str(f, 'itemId', 40) });
+    if (!r.success) return done(Astro, r.error.issues[0].message, undefined, 'error');
+    const item = r.data.itemId ? itemById.get(r.data.itemId) : undefined;
+    let scheduledAt: Date | null = null;
+    if (action === 'schedule') {
+      scheduledAt = parseLocalDateTime(str(f, 'scheduledAt', 20), t.timezone);
+      if (!scheduledAt || scheduledAt.getTime() < Date.now() - 60_000) return done(Astro, 'Pick a time in the future to schedule.', undefined, 'error');
+    }
+    if (r.data.networks.includes('instagram') && !r.data.imageUrl) return done(Astro, 'Instagram posts need an image.', undefined, 'error');
+    await db.insert(schema.socialPosts).values({ tenantId, caption: r.data.caption, networks: r.data.networks, imageUrl: r.data.imageUrl || null, itemId: item?.id ?? null, link: linkFor(item?.slug), status: scheduledAt ? 'scheduled' : 'draft', scheduledAt });
+    return done(Astro, scheduledAt ? `Scheduled for ${fmtDateTime(scheduledAt, t.timezone)}.` : 'Saved as a draft.', '/app/social#queue');
+  } else {
+    const id = str(f, 'id', 40);
+    if (!z.uuid().safeParse(id).success) return done(Astro, 'Unknown post.', undefined, 'error');
+    const where = and(eq(schema.socialPosts.id, id), eq(schema.socialPosts.tenantId, tenantId));
+    const [post] = await db.select().from(schema.socialPosts).where(where).limit(1);
+    if (!post) return done(Astro, 'Unknown post.', undefined, 'error');
+    if (action === 'posted') {
+      await db.update(schema.socialPosts).set({ status: 'published', publishedAt: new Date(), result: { ...(post.result ?? {}), manual: true } }).where(where);
+      return done(Astro, 'Marked as posted. Nice!', '/app/social#queue');
+    }
+    if (action === 'publish') {
+      const r = await publishPost(t, post);
+      if (r.status === 'scheduled') return done(Astro, 'None of these networks are connected yet — copy the caption, post it, then click “Mark as posted”.', '/app/social#queue', 'error');
+      await db.update(schema.socialPosts).set({ status: r.status, publishedAt: r.status === 'published' ? new Date() : null, result: r.results }).where(where);
+      return done(Astro, r.status === 'published' ? `Published to ${r.published} network${r.published === 1 ? '' : 's'}${r.manual ? ` (${r.manual} still manual)` : ''}.` : 'Publishing failed — see the error on the post.', '/app/social#queue', r.status === 'published' ? 'ok' : 'error');
+    }
+    if (action === 'schedule-existing') {
+      const at = parseLocalDateTime(str(f, 'scheduledAt', 20), t.timezone);
+      if (!at) return done(Astro, 'Pick a time.', '/app/social#queue', 'error');
+      await db.update(schema.socialPosts).set({ status: 'scheduled', scheduledAt: at }).where(where);
+      return done(Astro, `Scheduled for ${fmtDateTime(at, t.timezone)}.`, '/app/social#queue');
+    }
+    if (action === 'unschedule') {
+      await db.update(schema.socialPosts).set({ status: 'draft', scheduledAt: null }).where(where);
+      return done(Astro, 'Moved back to drafts.', '/app/social#queue');
+    }
+    if (action === 'delete') {
+      await db.delete(schema.socialPosts).where(where);
+      return done(Astro, 'Post deleted.', '/app/social#queue');
+    }
+    return done(Astro, 'Unknown action.', undefined, 'error');
+  }
+}
+
+const queue = await db.select().from(schema.socialPosts).where(and(eq(schema.socialPosts.tenantId, tenantId), inArray(schema.socialPosts.status, ['draft', 'scheduled', 'failed'])))
+  .orderBy(sql`${schema.socialPosts.scheduledAt} asc nulls last`, desc(schema.socialPosts.createdAt)).limit(60);
+const recent = await db.select().from(schema.socialPosts).where(and(eq(schema.socialPosts.tenantId, tenantId), eq(schema.socialPosts.status, 'published'))).orderBy(desc(schema.socialPosts.publishedAt)).limit(10);
+
+// Calendar: 4 weeks from this week's Monday (tenant timezone).
+const today = localDay(new Date(), t.timezone);
+const dow = (new Date(today + 'T12:00:00Z').getUTCDay() + 6) % 7;
+const start = addDays(today, -dow);
+const days = Array.from({ length: 28 }, (_, i) => addDays(start, i));
+const calPosts = await db.select().from(schema.socialPosts).where(and(eq(schema.socialPosts.tenantId, tenantId), gte(sql`coalesce(${schema.socialPosts.scheduledAt}, ${schema.socialPosts.publishedAt})`, new Date(start + 'T00:00:00Z')), lt(sql`coalesce(${schema.socialPosts.scheduledAt}, ${schema.socialPosts.publishedAt})`, new Date(addDays(start, 29) + 'T00:00:00Z'))));
+const byDay = new Map<string, typeof calPosts>();
+for (const p of calPosts) { const d = localDay((p.scheduledAt ?? p.publishedAt)!, t.timezone); byDay.set(d, [...(byDay.get(d) ?? []), p]); }
+
+// Content ideas, grounded in this operator's data.
+const nextSat = addDays(today, (5 - dow + 7) % 7 || 7);
+const [openSat] = await db.select({ n: sql<number>`count(*)::int` }).from(schema.bookings).where(and(eq(schema.bookings.tenantId, tenantId), inArray(schema.bookings.status, ['hold', 'pending', 'confirmed']), sql`(${schema.bookings.startsAt} at time zone ${t.timezone})::date = ${nextSat}::date`));
+const [topReview] = await db.select().from(schema.reviews).where(and(eq(schema.reviews.tenantId, tenantId), eq(schema.reviews.rating, 5), eq(schema.reviews.featured, true))).orderBy(desc(schema.reviews.createdAt)).limit(1);
+const wet = items.find((i) => i.isWet);
+const feat = items.find((i) => i.featured) ?? items[0];
+const month = Number(today.slice(5, 7));
+const ideas = [
+  { icon: 'calendar', title: `Weekend availability — Sat ${formatLocal(new Date(nextSat + 'T12:00:00Z'), 'UTC', { month: 'short', day: 'numeric' })}`, text: `${openSat.n} booking${openSat.n === 1 ? '' : 's'} so far. Post what’s still open — “last-minute” posts fill gaps.`, href: `?occasion=${encodeURIComponent('weekend availability')}${feat ? `&item=${feat.id}` : ''}` },
+  ...(feat ? [{ icon: 'star', title: `Spotlight: ${feat.name}`, text: 'Show the unit set up in a real yard. Mention size and ages.', href: `?item=${feat.id}&occasion=${encodeURIComponent('birthday parties')}` }] : []),
+  ...(wet && month >= 3 && month <= 9 ? [{ icon: 'sparkle', title: `Water slide season: ${wet.name}`, text: 'Heat-wave weekends sell slides. Post on Wednesdays for weekend bookings.', href: `?item=${wet.id}&occasion=${encodeURIComponent('summer water slide season')}` }] : []),
+  ...(topReview ? [{ icon: 'message', title: `Share a 5-star review from ${topReview.author}`, text: `“${topReview.body.slice(0, 90)}${topReview.body.length > 90 ? '…' : ''}”`, href: `?occasion=${encodeURIComponent('happy customer review')}` }] : []),
+  { icon: 'shield', title: 'Behind the scenes: how we clean every unit', text: 'Cleaning and safety content builds trust with first-time renters.', href: `?occasion=${encodeURIComponent('cleaning and safety')}` },
+  { icon: 'map', title: 'School & church events', text: 'Fall festivals and field days book early. Mention your certificate of insurance.', href: `?occasion=${encodeURIComponent('school field day')}` },
+];
+const connected = connectedNetworks(t);
+const imageChoices = [...new Set(items.flatMap((i) => i.images.slice(0, 1)))].slice(0, 12);
+const defaultAt = toLocalInput(new Date(new Date(nextSat + 'T15:00:00Z').getTime() - 2 * 86_400_000), t.timezone);
+const netLabel = (n: string) => NETWORKS.find((x) => x.key === n)?.label ?? n;
+---
+<AppLayout title="Social Studio" section="social" subtitle="Write a week of posts in five minutes. Schedule to Facebook, Instagram and Google Business Profile." wide>
+  <div class="grid gap-6 xl:grid-cols-[1fr_380px]">
+    <div class="space-y-6 min-w-0">
+      <section class="card p-4 sm:p-6" aria-labelledby="compose-h">
+        <h2 id="compose-h" class="font-bold text-lg">Compose</h2>
+        <form method="post" class="mt-3 grid gap-3 sm:grid-cols-[1fr_1fr_120px_auto] items-end">
+          <input type="hidden" name="_action" value="generate" />
+          <div><label class="label" for="g-item">Rental</label>
+            <select class="input" id="g-item" name="itemId"><option value="">Any / general</option>{items.map((i) => <option value={i.id} selected={draft.itemId === i.id}>{i.name}</option>)}</select></div>
+          <div><label class="label" for="g-occ">Occasion</label><input class="input" id="g-occ" name="occasion" list="occasions" value={draft.occasion} maxlength="60" /><datalist id="occasions">{OCCASIONS.map((o) => <option value={o} />)}</datalist></div>
+          <div><label class="label" for="g-tone">Tone</label><select class="input" id="g-tone" name="tone">{['fun', 'helpful', 'urgent'].map((x) => <option value={x} selected={draft.tone === x}>{x}</option>)}</select></div>
+          <button class="btn-pop" disabled={!canEdit}><Icon name="sparkle" size={16} />Write captions</button>
+        </form>
+
+        {generated.length > 0 && (
+          <fieldset class="mt-4">
+            <legend class="label">Pick a caption <span class="font-normal text-ink-2">— it goes into the editor below</span></legend>
+            <div class="grid gap-2 md:grid-cols-3">
+              {generated.map((c, i) => (
+                <button type="button" class="text-left rounded-xl border border-line p-3 text-sm hover:border-brand hover:bg-brand-soft/40 cursor-pointer" data-caption={c}>
+                  <span class="chip bg-canvas text-ink-2 mb-1">Option {i + 1}</span><span class="block">{c}</span>
+                </button>
+              ))}
+            </div>
+          </fieldset>
+        )}
+
+        <form method="post" class="mt-5 grid gap-4 lg:grid-cols-[1fr_260px]" id="composer">
+          <input type="hidden" name="itemId" value={draft.itemId} />
+          <div class="space-y-3">
+            <div>
+              <label class="label" for="caption">Caption <span class="font-normal text-ink-2" data-count>({draft.caption.length}/2200)</span></label>
+              <textarea class="input" id="caption" name="caption" rows="6" maxlength="2200" required placeholder="Click “Write captions”, or write your own.">{draft.caption}</textarea>
+            </div>
+            <fieldset><legend class="label">Networks</legend>
+              <div class="flex flex-wrap gap-2">
+                {NETWORKS.map((n) => (
+                  <label class="flex items-center gap-2 rounded-xl border border-line px-3 py-2 text-sm cursor-pointer has-[:checked]:border-brand has-[:checked]:bg-brand-soft/50">
+                    <input type="checkbox" name="networks" value={n.key} checked={draft.networks.includes(n.key)} class="accent-[var(--color-brand)]" />{n.label}
+                    <span class:list={['size-2 rounded-full', connected.includes(n.key) ? 'bg-mint' : 'bg-line']} title={connected.includes(n.key) ? 'Connected — auto-publishes' : 'Manual — copy & mark as posted'}></span>
+                  </label>
+                ))}
+              </div>
+              <p class="hint">Green dot = auto-publish. Others are manual: we remind you, you copy the caption and tap “Mark as posted”.</p>
+            </fieldset>
+            <div class="flex flex-wrap items-end gap-2 pt-2 border-t border-line">
+              <button class="btn-ghost" name="_action" value="save" disabled={!canEdit}>Save draft</button>
+              <div><label class="label text-xs" for="scheduledAt">Post at ({t.timezone.split('/')[1]?.replace('_', ' ')} time)</label><input class="input w-auto" type="datetime-local" id="scheduledAt" name="scheduledAt" value={defaultAt} /></div>
+              <button class="btn-primary" name="_action" value="schedule" disabled={!canEdit}><Icon name="clock" size={16} />Schedule</button>
+            </div>
+          </div>
+          <div>
+            <label class="label" for="imageUrl">Image</label>
+            <input class="input text-xs" id="imageUrl" name="imageUrl" value={draft.imageUrl} maxlength="500" placeholder="/demo/… or https://" />
+            <div class="mt-2 grid grid-cols-4 gap-1.5" role="group" aria-label="Pick an item image">
+              {imageChoices.map((src) => <button type="button" class="aspect-square rounded-lg border border-line overflow-hidden hover:ring-2 hover:ring-brand bg-canvas cursor-pointer" data-img={src} aria-label="Use this image"><img src={src} alt="" class="size-full object-cover" loading="lazy" /></button>)}
+            </div>
+            <div class="mt-3 rounded-xl border border-line overflow-hidden bg-canvas aspect-square grid place-items-center">
+              <img data-preview src={draft.imageUrl || undefined} alt="Selected post image" class:list={['size-full object-cover', !draft.imageUrl && 'hidden']} />
+              {!draft.imageUrl && <span data-noimg class="text-xs text-ink-2">No image</span>}
+            </div>
+          </div>
+        </form>
+      </section>
+
+      <section id="queue" class="card overflow-hidden scroll-mt-24" aria-labelledby="queue-h">
+        <h2 id="queue-h" class="font-bold px-4 py-3 border-b border-line">Queue <span class="text-ink-2 font-medium text-sm">({queue.length})</span></h2>
+        {queue.length === 0 ? <p class="p-6 text-sm text-ink-2">Nothing queued. Pick a content idea to get started →</p> : (
+          <ul class="divide-y divide-line">
+            {queue.map((p) => {
+              const due = p.status === 'scheduled' && p.scheduledAt && p.scheduledAt.getTime() <= Date.now();
+              const manualNets = p.networks.filter((n) => !ADAPTERS[n].connected(t));
+              const errs = Object.entries((p.result ?? {}) as Record<string, { ok?: boolean; error?: string; manual?: boolean }>).filter(([, r]) => r && r.ok === false && !r.manual);
+              return (
+                <li class="p-4 flex flex-wrap gap-4">
+                  {p.imageUrl && <img src={p.imageUrl} alt="" class="size-16 rounded-xl object-cover border border-line bg-canvas shrink-0" loading="lazy" />}
+                  <div class="min-w-0 flex-1 basis-64">
+                    <div class="flex flex-wrap items-center gap-1.5 text-xs">
+                      <span class:list={['chip', p.status === 'failed' ? 'bg-red-50 text-red-800' : due ? 'bg-pop/15 text-[#9A3412]' : p.status === 'scheduled' ? 'bg-sky-100 text-sky-800' : 'bg-canvas text-ink-2']}>{p.status === 'failed' ? 'Failed' : due ? 'Due now' : p.status === 'scheduled' ? fmtDateTime(p.scheduledAt, t.timezone) : 'Draft'}</span>
+                      {p.networks.map((n) => <span class="chip bg-canvas text-ink-2">{netLabel(n)}</span>)}
+                      {p.itemId && itemById.get(p.itemId) && <span class="text-ink-2">· {itemById.get(p.itemId)!.name}</span>}
+                    </div>
+                    <p class="text-sm mt-1.5 whitespace-pre-line break-words line-clamp-4" id={`cap-${p.id}`}>{p.caption}</p>
+                    {errs.map(([n, r]) => <p class="text-xs text-danger mt-1">{netLabel(n)}: {r.error}</p>)}
+                    {manualNets.length > 0 && <p class="text-xs text-ink-2 mt-1">Manual: {manualNets.map(netLabel).join(', ')}</p>}
+                  </div>
+                  {canEdit && (
+                    <div class="flex flex-wrap gap-1.5 items-start basis-full sm:basis-auto">
+                      <button type="button" class="btn-ghost min-h-9 px-3 text-xs" data-copy={`cap-${p.id}`}>Copy caption</button>
+                      <form method="post"><input type="hidden" name="id" value={p.id} /><input type="hidden" name="_action" value="posted" /><button class="btn-primary min-h-9 px-3 text-xs"><Icon name="check" size={14} />Mark as posted</button></form>
+                      {p.networks.some((n) => connected.includes(n)) && <form method="post"><input type="hidden" name="id" value={p.id} /><input type="hidden" name="_action" value="publish" /><button class="btn-ghost min-h-9 px-3 text-xs">Publish now</button></form>}
+                      {p.status === 'scheduled'
+                        ? <form method="post"><input type="hidden" name="id" value={p.id} /><input type="hidden" name="_action" value="unschedule" /><button class="btn-ghost min-h-9 px-3 text-xs">Unschedule</button></form>
+                        : <form method="post" class="flex gap-1"><input type="hidden" name="id" value={p.id} /><input type="hidden" name="_action" value="schedule-existing" /><label class="sr-only" for={`at-${p.id}`}>Schedule time</label><input id={`at-${p.id}`} class="input min-h-9 w-auto text-xs" type="datetime-local" name="scheduledAt" value={defaultAt} /><button class="btn-ghost min-h-9 px-3 text-xs">Schedule</button></form>}
+                      <form method="post" onsubmit="return confirm('Delete this post?')"><input type="hidden" name="id" value={p.id} /><input type="hidden" name="_action" value="delete" /><button class="btn-danger min-h-9 px-3 text-xs" aria-label="Delete post">✕</button></form>
+                    </div>
+                  )}
+                </li>
+              );
+            })}
+          </ul>
+        )}
+      </section>
+
+      <section class="card p-4 sm:p-6" aria-labelledby="cal-h">
+        <h2 id="cal-h" class="font-bold text-lg mb-3">Calendar <span class="text-sm font-medium text-ink-2">next 4 weeks</span></h2>
+        <div class="grid grid-cols-7 gap-1 text-center text-[11px] font-semibold uppercase tracking-wide text-ink-2 mb-1" aria-hidden="true">{['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'].map((d) => <span>{d}</span>)}</div>
+        <ol class="grid grid-cols-7 gap-1">
+          {days.map((d) => {
+            const ps = byDay.get(d) ?? [];
+            return (
+              <li class:list={['min-h-16 sm:min-h-20 rounded-lg border p-1 sm:p-1.5 text-left', d === today ? 'border-brand bg-brand-soft/40' : 'border-line', d < today && 'opacity-60']} aria-label={`${d}: ${ps.length} posts`}>
+                <span class="block text-[11px] font-bold tabular-nums">{Number(d.slice(8))}</span>
+                {ps.slice(0, 3).map((p) => <span class:list={['block truncate rounded px-1 mt-0.5 text-[10px] leading-4', p.status === 'published' ? 'bg-green-100 text-green-800' : p.status === 'failed' ? 'bg-red-100 text-red-800' : 'bg-sky-100 text-sky-800']} title={p.caption}>{p.status === 'published' ? '✓ ' : ''}{p.caption}</span>)}
+                {ps.length > 3 && <span class="block text-[10px] text-ink-2">+{ps.length - 3}</span>}
+              </li>
+            );
+          })}
+        </ol>
+      </section>
+    </div>
+
+    <aside class="space-y-4">
+      <section class="card p-4" aria-labelledby="ideas-h">
+        <h2 id="ideas-h" class="font-bold">Content ideas</h2>
+        <ul class="mt-3 space-y-2">
+          {ideas.map((i) => (
+            <li><a href={`/app/social${i.href}`} class="flex gap-3 rounded-xl border border-line p-3 hover:border-brand hover:bg-brand-soft/30">
+              <span class="grid place-items-center size-9 rounded-lg bg-brand-soft text-brand shrink-0"><Icon name={i.icon} size={18} /></span>
+              <span class="min-w-0"><span class="block text-sm font-semibold">{i.title}</span><span class="block text-xs text-ink-2 mt-0.5">{i.text}</span></span>
+            </a></li>
+          ))}
+        </ul>
+      </section>
+      <section class="card p-4 text-sm" aria-labelledby="conn-h">
+        <h2 id="conn-h" class="font-bold">Connections</h2>
+        <ul class="mt-2 space-y-1.5">
+          {NETWORKS.map((n) => <li class="flex items-center gap-2"><span class:list={['size-2.5 rounded-full', connected.includes(n.key) ? 'bg-mint' : 'bg-line']}></span>{n.label}<span class="ml-auto text-xs text-ink-2">{connected.includes(n.key) ? 'Auto-publish' : n.key === 'tiktok' ? 'Manual only' : 'Manual'}</span></li>)}
+        </ul>
+        <p class="hint mt-2">Auto-publishing uses Meta Graph and the Google Business Profile API. Ask Branch Avenue support to connect your Page and profile — tokens live in our secrets vault, never in your dashboard.</p>
+      </section>
+      {recent.length > 0 && (
+        <section class="card overflow-hidden" aria-labelledby="recent-h">
+          <h2 id="recent-h" class="font-bold px-4 py-3 border-b border-line text-sm">Recently posted</h2>
+          <ul class="divide-y divide-line">{recent.map((p) => <li class="px-4 py-2 text-xs"><p class="truncate">{p.caption}</p><p class="text-ink-2">{fmtDateTime(p.publishedAt, t.timezone)} · {p.networks.map(netLabel).join(', ')}</p></li>)}</ul>
+        </section>
+      )}
+    </aside>
+  </div>
+
+  <script>
+    const cap = document.getElementById('caption') as HTMLTextAreaElement | null;
+    const count = document.querySelector('[data-count]');
+    const upd = () => { if (cap && count) count.textContent = `(${cap.value.length}/2200)`; };
+    cap?.addEventListener('input', upd);
+    document.querySelectorAll<HTMLButtonElement>('[data-caption]').forEach((b) => b.addEventListener('click', () => { if (cap) { cap.value = b.dataset.caption ?? ''; upd(); cap.focus(); } }));
+    const img = document.getElementById('imageUrl') as HTMLInputElement | null;
+    const prev = document.querySelector<HTMLImageElement>('[data-preview]');
+    const setImg = (src: string) => { if (img) img.value = src; if (prev) { prev.src = src; prev.classList.toggle('hidden', !src); } document.querySelector('[data-noimg]')?.classList.toggle('hidden', !!src); };
+    document.querySelectorAll<HTMLButtonElement>('[data-img]').forEach((b) => b.addEventListener('click', () => setImg(b.dataset.img ?? '')));
+    img?.addEventListener('change', () => setImg(img.value));
+    document.querySelectorAll<HTMLButtonElement>('[data-copy]').forEach((b) => b.addEventListener('click', async () => {
+      const el = document.getElementById(b.dataset.copy!);
+      try { await navigator.clipboard.writeText(el?.textContent ?? ''); b.textContent = 'Copied ✓'; setTimeout(() => (b.textContent = 'Copy caption'), 1600); } catch { b.textContent = 'Select & copy'; }
+    }));
+  </script>
+</AppLayout>

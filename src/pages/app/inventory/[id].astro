@@ -1,0 +1,179 @@
+---
+/** Edit an item + maintenance log + 30-day availability heatmap. */
+import { and, desc, eq, sql } from 'drizzle-orm';
+import AppLayout from '../../../layouts/AppLayout.astro';
+import Icon from '../../../components/Icon.astro';
+import ItemForm from './_ItemForm.astro';
+import { getDb, schema } from '../../../db/client';
+import { availability } from '../../../lib/booking';
+import { money } from '../../../lib/pricing';
+import { formData, flash, parse, str, int, cents } from '../../../lib/forms';
+import { zonedToUtc } from '../../../lib/time';
+import { opsCtx, isUuid, isValidDay, addDays, dateOnly, shortDay } from '../../../lib/ops/ctx';
+import { readItemForm, ItemSchema, type OpsSpecs } from '../../../lib/ops/items';
+import { logActivity } from '../../../lib/ops/stats';
+
+const { t, tz, today, settings, canManage } = opsCtx(Astro);
+const id = Astro.params.id;
+if (!isUuid(id)) return new Response('Not found', { status: 404 });
+const db = await getDb();
+const I = schema.items, M = schema.maintenanceLogs;
+const self = `/app/inventory/${id}`;
+const load = async () => (await db.select().from(I).where(and(eq(I.id, id), eq(I.tenantId, t.id))).limit(1))[0];
+let item = await load();
+if (!item) return new Response('Not found', { status: 404 });
+
+const [cats, others] = await Promise.all([
+  db.select({ id: schema.categories.id, name: schema.categories.name }).from(schema.categories).where(eq(schema.categories.tenantId, t.id)).orderBy(schema.categories.sort),
+  db.select({ id: I.id, name: I.name, kind: I.kind, quantity: I.quantity }).from(I).where(eq(I.tenantId, t.id)).orderBy(I.name),
+]);
+const valid = new Set([...others.filter((o) => o.id !== id).map((o) => o.id), ...cats.map((c) => 'cat:' + c.id)]);
+let error = '';
+let formItem: Record<string, unknown> = item;
+
+const f = await formData(Astro);
+if (f && canManage) {
+  const action = str(f, '_action', 20);
+  if (action === 'save') {
+    const v = readItemForm(f, valid);
+    formItem = { ...item, ...v };
+    const r = parse(ItemSchema, v);
+    if (!r.ok) error = Object.values(r.errors)[0];
+    else if (v.kind === 'package' && !v.bundle.length) error = 'Packages need at least one component item.';
+    else {
+      try {
+        await db.update(I).set({ ...v, updatedAt: new Date() }).where(and(eq(I.id, id), eq(I.tenantId, t.id)));
+        flash(Astro.cookies, `${v.name} saved.`);
+        return Astro.redirect(self, 303);
+      } catch (e) {
+        error = String((e as Error).message).includes('items_slug_uq') ? 'Another item already uses that URL slug.' : 'Couldn’t save the item.';
+      }
+    }
+  } else if (action === 'log') {
+    const kind = (['cleaning', 'repair', 'inspection', 'retired'] as const).find((k) => k === str(f, 'kind', 20)) ?? 'cleaning';
+    const until = str(f, 'until', 10);
+    const units = Math.max(1, Math.min(item.quantity || 1, int(f, 'units', 1)));
+    // Repairs without a date are logged as already back in service; retired = permanently out.
+    const oos = kind === 'repair' ? (isValidDay(until) ? zonedToUtc(until, 23, 59, tz) : new Date()) : null;
+    await db.insert(M).values({ tenantId: t.id, itemId: id, kind, note: str(f, 'note', 1000), costCents: cents(f, 'cost'), outOfServiceUntil: oos, unitsAffected: units });
+    await logActivity(t.id, 'maintenance', `${kind[0].toUpperCase() + kind.slice(1)} logged for ${item.name}`, { itemId: id });
+    flash(Astro.cookies, kind === 'retired' ? `${units} unit(s) retired — removed from availability.` : kind === 'repair' && isValidDay(until) ? `Out of service until ${until}. Availability updated.` : `${kind[0].toUpperCase() + kind.slice(1)} logged.`);
+    return Astro.redirect(self + '#maintenance', 303);
+  } else if (action === 'restore') {
+    const logId = str(f, 'logId', 40);
+    if (isUuid(logId)) await db.update(M).set({ outOfServiceUntil: new Date(), kind: sql`case when ${M.kind} = 'retired' then 'repair' else ${M.kind} end` }).where(and(eq(M.id, logId), eq(M.tenantId, t.id), eq(M.itemId, id)));
+    flash(Astro.cookies, 'Back in service.');
+    return Astro.redirect(self + '#maintenance', 303);
+  } else if (action === 'delete') {
+    const [used] = await db.select({ n: sql<number>`count(*)::int` }).from(schema.bookingLines).where(and(eq(schema.bookingLines.tenantId, t.id), eq(schema.bookingLines.itemId, id)));
+    if (used.n > 0) { flash(Astro.cookies, `${item.name} has ${used.n} booking line(s), so it can’t be deleted — uncheck “Active” to hide it instead.`, 'error'); return Astro.redirect(self, 303); }
+    await db.delete(I).where(and(eq(I.id, id), eq(I.tenantId, t.id)));
+    flash(Astro.cookies, `${item.name} deleted.`);
+    return Astro.redirect('/app/inventory', 303);
+  }
+}
+
+const logs = await db.select().from(M).where(and(eq(M.tenantId, t.id), eq(M.itemId, id))).orderBy(desc(M.createdAt)).limit(30);
+const [stats] = await db.select({ n: sql<number>`count(distinct ${schema.bookings.id})::int`, rev: sql<number>`coalesce(sum(${schema.bookingLines.totalCents}),0)::int` })
+  .from(schema.bookingLines).innerJoin(schema.bookings, eq(schema.bookings.id, schema.bookingLines.bookingId))
+  .where(and(eq(schema.bookingLines.tenantId, t.id), eq(schema.bookingLines.itemId, id), sql`${schema.bookings.status} in ('pending','confirmed','completed')`));
+const maint = logs.reduce((s, l) => s + l.costCents, 0);
+const purchase = ((item.specs ?? {}) as OpsSpecs).purchaseCostCents;
+
+// 30-day heatmap via availability() for the default event window.
+const sh = settings.defaultStartHour ?? 10, eh = settings.defaultEndHour ?? 18;
+const qtyOf = new Map(others.map((o) => [o.id, o.quantity]));
+const capacity = item.kind === 'package' ? Math.min(...(item.bundle.length ? item.bundle.map((b) => Math.floor((qtyOf.get(b.itemId) ?? 0) / Math.max(1, b.qty))) : [0])) : item.quantity;
+const heat: { day: string; free: number; used: number }[] = [];
+for (let i = 0; i < 30; i++) {
+  const day = addDays(today, i);
+  const av = await availability(t, { day, startHour: sh, endHour: eh }, { skipRules: true });
+  const free = av.free[id] ?? 0;
+  heat.push({ day, free, used: Math.max(0, capacity - free) });
+}
+const bookedDays = heat.filter((h) => h.used > 0).length;
+const heatCls = (h: { free: number; used: number }) => capacity === 0 ? 'bg-gray-100 text-ink-2' : h.free === 0 ? 'bg-brand text-white' : h.used === 0 ? 'bg-white text-ink-2' : h.used / capacity >= 0.5 ? 'bg-[#9C88FA] text-white' : 'bg-brand-soft text-brand';
+const kindCls: Record<string, string> = { cleaning: 'bg-sky-100 text-sky-800', repair: 'bg-amber-100 text-amber-900', inspection: 'bg-green-100 text-green-800', retired: 'bg-red-100 text-red-800' };
+const isDown = (l: typeof logs[number]) => (l.kind === 'retired' && l.outOfServiceUntil == null) || (l.kind === 'repair' && l.outOfServiceUntil && l.outOfServiceUntil > new Date());
+---
+<AppLayout title={item.name} section="inventory" subtitle={`${item.kind === 'package' ? 'Package' : item.kind === 'addon' ? 'Add-on' : 'Rental'} · ${money(item.priceCents)} · ${item.kind === 'package' ? `${capacity} bookable` : `${item.quantity} unit${item.quantity === 1 ? '' : 's'}`}`} wide>
+  <Fragment slot="actions">
+    <a href="/app/inventory" class="btn-ghost"><Icon name="arrow" size={16} class="rotate-180" />Inventory</a>
+    <a href={`/app/bookings/new?items=${id}:1`} class="btn-ghost"><Icon name="plus" size={16} />Book this</a>
+  </Fragment>
+
+  <section class="card p-5 mb-6" aria-labelledby="heat-h">
+    <div class="flex flex-wrap items-center gap-x-4 gap-y-1">
+      <h2 id="heat-h" class="font-bold text-lg">Next 30 days</h2>
+      <p class="text-sm text-ink-2">{bookedDays} of 30 days with units booked or out of service · window {sh}:00–{eh}:00 incl. setup & teardown buffers</p>
+      <ul class="sm:ml-auto flex items-center gap-3 text-xs text-ink-2" aria-label="Legend">
+        <li class="flex items-center gap-1.5"><span class="size-3 rounded border border-line bg-white"></span>All free</li>
+        <li class="flex items-center gap-1.5"><span class="size-3 rounded bg-brand-soft"></span>Some booked</li>
+        <li class="flex items-center gap-1.5"><span class="size-3 rounded bg-[#9C88FA]"></span>Mostly booked</li>
+        <li class="flex items-center gap-1.5"><span class="size-3 rounded bg-brand"></span>Booked out</li>
+      </ul>
+    </div>
+    <ol class="grid grid-cols-6 sm:grid-cols-10 lg:grid-cols-15 gap-1.5 mt-4">
+      {heat.map((h) => (
+        <li>
+          <a href={`/app/deliveries?day=${h.day}`} class:list={['block rounded-lg border border-line/60 px-1 py-1.5 text-center hover:ring-2 hover:ring-brand/40', heatCls(h)]} title={`${shortDay(h.day)}: ${h.free} of ${capacity} free`}>
+            <span class="block text-[10px] uppercase opacity-80">{shortDay(h.day).split(',')[0]}</span>
+            <span class="block text-sm font-bold tabular-nums">{Number(h.day.slice(8))}</span>
+            <span class="block text-[10px] tabular-nums">{h.free}/{capacity}</span>
+          </a>
+        </li>
+      ))}
+    </ol>
+    <dl class="grid grid-cols-2 sm:grid-cols-4 gap-3 mt-5">
+      <div class="rounded-xl bg-canvas p-3"><dt class="kpi-label">Bookings</dt><dd class="text-lg font-bold tabular-nums">{stats.n}</dd></div>
+      <div class="rounded-xl bg-canvas p-3"><dt class="kpi-label">Lifetime revenue</dt><dd class="text-lg font-bold tabular-nums">{money(stats.rev)}</dd></div>
+      <div class="rounded-xl bg-canvas p-3"><dt class="kpi-label">Maintenance cost</dt><dd class="text-lg font-bold tabular-nums">{money(maint)}</dd></div>
+      <div class="rounded-xl bg-canvas p-3"><dt class="kpi-label">ROI</dt><dd class="text-lg font-bold tabular-nums">{purchase ? `${Math.round(((stats.rev - maint) / purchase) * 100)}%` : '—'}</dd>{!purchase && <p class="hint !mt-0">Add purchase cost below</p>}</div>
+    </dl>
+  </section>
+
+  <ItemForm item={formItem} categories={cats} others={others.filter((o) => o.id !== id)} surfaces={settings.surfaces ?? []} error={error} submitLabel="Save changes" />
+
+  <section id="maintenance" class="card p-5 mt-6 scroll-mt-20" aria-labelledby="mnt-h">
+    <h2 id="mnt-h" class="font-bold text-lg">Maintenance log</h2>
+    <p class="text-sm text-ink-2">Repairs with a date and retirements take units out of availability automatically.</p>
+    <div class="grid gap-6 lg:grid-cols-[360px_minmax(0,1fr)] mt-4">
+      {canManage && (
+        <form method="post" class="space-y-3 rounded-xl border border-line p-4 self-start">
+          <input type="hidden" name="_action" value="log" />
+          <div class="grid grid-cols-2 gap-2">
+            <div><label class="label" for="mkind">Type</label><select id="mkind" name="kind" class="input"><option value="cleaning">Cleaning</option><option value="inspection">Inspection</option><option value="repair">Repair</option><option value="retired">Retire units</option></select></div>
+            <div><label class="label" for="units">Units</label><input id="units" name="units" type="number" min="1" max={item.quantity || 1} class="input" value="1" /></div>
+          </div>
+          <div class="grid grid-cols-2 gap-2">
+            <div><label class="label" for="until">Out until <span class="font-normal text-ink-2">(repairs)</span></label><input id="until" name="until" type="date" class="input" min={today} /></div>
+            <div><label class="label" for="cost">Cost ($)</label><input id="cost" name="cost" class="input" inputmode="decimal" placeholder="0" /></div>
+          </div>
+          <div><label class="label" for="note">Note</label><textarea id="note" name="note" class="input" rows="2" placeholder="Patched seam on left turret"></textarea></div>
+          <button class="btn-primary w-full"><Icon name="wrench" size={16} />Add log entry</button>
+        </form>
+      )}
+      {logs.length === 0 ? <p class="text-sm text-ink-2">No entries yet. Log a cleaning after every rental to unlock “Clean machine”.</p> : (
+        <ul class="divide-y divide-line">
+          {logs.map((l) => (
+            <li class="py-3 flex flex-wrap items-start gap-3">
+              <span class:list={['chip capitalize', kindCls[l.kind]]}>{l.kind}</span>
+              <div class="min-w-0 flex-1">
+                <p class="text-sm">{l.note || <span class="text-ink-2">No note</span>}</p>
+                <p class="text-xs text-ink-2">{dateOnly(l.createdAt, tz)} · {l.unitsAffected} unit{l.unitsAffected === 1 ? '' : 's'}{l.costCents ? ` · ${money(l.costCents)}` : ''}{l.kind === 'repair' && l.outOfServiceUntil && isDown(l) ? ` · out until ${dateOnly(l.outOfServiceUntil, tz)}` : ''}</p>
+              </div>
+              {isDown(l) && canManage && <form method="post"><input type="hidden" name="_action" value="restore" /><input type="hidden" name="logId" value={l.id} /><button class="btn-ghost min-h-9 text-xs">Back in service</button></form>}
+            </li>
+          ))}
+        </ul>
+      )}
+    </div>
+  </section>
+
+  {canManage && (
+    <form method="post" class="mt-6 flex justify-end" onsubmit="return confirm('Delete this item permanently?')">
+      <input type="hidden" name="_action" value="delete" />
+      <button class="btn-danger"><Icon name="x" size={16} />Delete item</button>
+    </form>
+  )}
+</AppLayout>

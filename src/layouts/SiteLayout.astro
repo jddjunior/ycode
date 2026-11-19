@@ -1,0 +1,286 @@
+---
+/**
+ * Tenant storefront layout: per-tenant theme tokens + fonts, SEO head (title template,
+ * canonical, OG, LocalBusiness JSON-LD), opt-in tracking tags, first-party attribution
+ * cookie, announcement bar, header, footer with NAP + service areas, and the mobile
+ * sticky Check Date · Text · Call bar.
+ */
+import '../styles/site.css';
+import Icon from '../components/Icon.astro';
+import type { SiteCtx } from '../lib/site/data';
+import { telHref, smsHref, minPrice } from '../lib/site/data';
+import { applyTitle, localBusinessLd } from '../lib/seo';
+import { jsonLd } from '../lib/util';
+import { THEMES, themeCss } from '../lib/themes';
+import { money } from '../lib/pricing';
+
+interface Props {
+  ctx: SiteCtx;
+  title: string;
+  description?: string;
+  image?: string | null;
+  ld?: (object | null)[];
+  noindex?: boolean;
+  rawTitle?: boolean;
+  conversion?: { valueCents: number; id: string } | null;
+}
+const { ctx, title, description, image, ld = [], noindex = false, rawTitle = false, conversion = null } = Astro.props;
+const { tenant: t, site, theme, base, href, origin, apiOrigin } = ctx;
+const preset = THEMES[theme.preset] ? theme.preset : 'carnival';
+const fontsHref = THEMES[preset].fontsHref;
+
+const fullTitle = rawTitle ? title : applyTitle(site.titleTemplate || '%s | {business}', title, t.name);
+const desc = (description || site.defaultDescription || `${t.name} — party rentals in ${t.city}, ${t.state}.`).slice(0, 300);
+const inSite = Astro.url.pathname.replace(new RegExp(`^/sites/${t.slug}`), '') || '/';
+const canonical = origin + (inSite === '/' ? '/' : inSite.replace(/\/$/, ''));
+const assetAbs = (u: string) => (/^https?:/.test(u) ? u : apiOrigin + (u.startsWith('/') ? u : '/' + u));
+const ogImage = assetAbs(image || site.ogImage || '/demo/og.svg');
+
+const integ = t.integrations ?? {};
+const ga4 = integ.ga4Id && /^G-[A-Z0-9]{4,16}$/.test(integ.ga4Id) ? integ.ga4Id : null;
+const aw = integ.googleAdsConversionId && /^AW-\d{6,14}$/.test(integ.googleAdsConversionId) ? integ.googleAdsConversionId : null;
+const awLabel = integ.googleAdsConversionLabel && /^[\w-]{3,40}$/.test(integ.googleAdsConversionLabel) ? integ.googleAdsConversionLabel : null;
+const pixel = integ.metaPixelId && /^\d{6,20}$/.test(integ.metaPixelId) ? integ.metaPixelId : null;
+const gtagId = ga4 ?? aw;
+const sameAs = [
+  integ.facebookPageId && `https://www.facebook.com/${encodeURIComponent(integ.facebookPageId)}`,
+  integ.instagramHandle && `https://www.instagram.com/${encodeURIComponent(integ.instagramHandle)}`,
+  integ.tiktokHandle && `https://www.tiktok.com/@${encodeURIComponent(integ.tiktokHandle)}`,
+].filter((x): x is string => !!x);
+
+const cityNames = ctx.cities.map((c) => c.local?.city ?? c.title);
+const business = localBusinessLd(t, origin, { cities: cityNames.length ? cityNames : [t.city], logo: t.logoUrl ? assetAbs(t.logoUrl) : null, sameAs });
+const lds = [business, ...ld].filter(Boolean);
+
+const nav = (site.nav?.length ? site.nav : [{ label: 'Rentals', href: '/rentals' }, { label: 'Packages', href: '/rentals/packages' }, { label: 'Service Areas', href: '/areas' }, { label: 'FAQ', href: '/faq' }, { label: 'Contact', href: '/contact' }]).slice(0, 7);
+const isCurrent = (h: string) => (h === '/' ? inSite === '/' : inSite === h || inSite.startsWith(h + '/'));
+const rentalCats = ctx.categories
+  .map((c) => ({ c, items: ctx.items.filter((i) => i.categoryId === c.id && i.kind !== 'package') }))
+  .filter((x) => x.items.length);
+const phone = t.phone;
+const monogram = t.name.replace(/[^A-Za-z ]/g, '').split(/\s+/).filter(Boolean).slice(0, 2).map((w) => w[0]).join('').toUpperCase() || 'B';
+const year = new Date().getFullYear();
+const robots = noindex || ctx.preview ? 'noindex, nofollow' : 'index, follow, max-image-preview:large';
+const footerCities = ctx.cities.slice(0, 25);
+const announcement = site.announcement?.trim();
+---
+<!doctype html>
+<html lang="en" data-theme={preset} data-slug={t.slug} data-api={ctx.api} data-base={base}>
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+  <title>{fullTitle}</title>
+  <meta name="description" content={desc} />
+  <link rel="canonical" href={canonical} />
+  <meta name="robots" content={robots} />
+  <meta property="og:site_name" content={t.name} />
+  <meta property="og:title" content={fullTitle} />
+  <meta property="og:description" content={desc} />
+  <meta property="og:type" content="website" />
+  <meta property="og:url" content={canonical} />
+  <meta property="og:image" content={ogImage} />
+  <meta name="twitter:card" content="summary_large_image" />
+  <meta name="theme-color" content={theme.primary} />
+  <meta name="format-detection" content="telephone=no" />
+  <link rel="icon" href={t.logoUrl ?? '/favicon.svg'} />
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link rel="stylesheet" href={fontsHref} />
+  <style is:inline set:html={themeCss(theme)}></style>
+  {lds.map((o) => <script type="application/ld+json" set:html={jsonLd(o)} />)}
+  <script is:inline>
+    /* first-party attribution cookie (utm/gclid/fbclid/referrer/landing) */
+    (function(){try{var q=new URLSearchParams(location.search),k=['utm_source','utm_medium','utm_campaign','utm_term','utm_content','gclid','fbclid'],o={},n=0;
+    k.forEach(function(x){var v=q.get(x);if(v){o[x]=v.slice(0,200);n++;}});
+    var has=/(?:^|; )bos_attr=/.test(document.cookie),r=document.referrer,ext=r&&r.indexOf(location.host)<0;
+    if(has&&!n)return;o.ref=ext?r.slice(0,400):'';o.lp=(location.pathname+location.search).slice(0,400);o.ts=Date.now();
+    document.cookie='bos_attr='+encodeURIComponent(JSON.stringify(o))+';path=/;max-age=7776000;samesite=lax'+(location.protocol==='https:'?';secure':'');}catch(e){}})();
+  </script>
+  {gtagId && (
+    <>
+      <script is:inline async src={`https://www.googletagmanager.com/gtag/js?id=${gtagId}`}></script>
+      <script is:inline define:vars={{ ga4, aw }}>
+        window.dataLayer=window.dataLayer||[];function gtag(){dataLayer.push(arguments);}window.gtag=gtag;gtag('js',new Date());
+        if(ga4)gtag('config',ga4);if(aw)gtag('config',aw);
+      </script>
+    </>
+  )}
+  {pixel && (
+    <script is:inline define:vars={{ pixel }}>
+      !function(f,b,e,v,n,t,s){if(f.fbq)return;n=f.fbq=function(){n.callMethod?n.callMethod.apply(n,arguments):n.queue.push(arguments)};if(!f._fbq)f._fbq=n;n.push=n;n.loaded=!0;n.version='2.0';n.queue=[];t=b.createElement(e);t.async=!0;t.src=v;s=b.getElementsByTagName(e)[0];s.parentNode.insertBefore(t,s)}(window,document,'script','https://connect.facebook.net/en_US/fbevents.js');
+      fbq('init',pixel);fbq('track','PageView');
+    </script>
+  )}
+  {conversion && (gtagId || pixel) && (
+    <script is:inline define:vars={{ value: conversion.valueCents / 100, tid: conversion.id, ga4, aw, awLabel, pixel }}>
+      try{var k='bos_conv_'+tid;if(!sessionStorage.getItem(k)){sessionStorage.setItem(k,'1');
+      if(window.gtag){if(ga4)gtag('event','purchase',{transaction_id:tid,value:value,currency:'USD'});if(aw&&awLabel)gtag('event','conversion',{send_to:aw+'/'+awLabel,value:value,currency:'USD',transaction_id:tid});}
+      if(window.fbq&&pixel)fbq('track','Purchase',{value:value,currency:'USD'});}}catch(e){}
+    </script>
+  )}
+</head>
+<body class="min-h-dvh flex flex-col pb-[84px] md:pb-0">
+  <a href="#main" class="sr-only focus:not-sr-only focus:fixed focus:top-2 focus:left-2 focus:z-[100] s-btn s-btn-primary">Skip to content</a>
+
+  <div class="s-stripes text-white">
+    <div class="s-wrap flex items-center justify-center md:justify-between gap-4 min-h-10 py-2 text-[13px] font-bold">
+      <p class="text-center">{announcement || `Delivery, setup & pickup included across ${t.city}`}</p>
+      {phone && (
+        <p class="hidden md:flex items-center gap-4 shrink-0">
+          <a class="inline-flex items-center gap-1.5 hover:underline" href={smsHref(phone)}><Icon name="message" size={15} /> Text us</a>
+          <a class="inline-flex items-center gap-1.5 hover:underline" href={telHref(phone)}><Icon name="phone" size={15} /> {phone}</a>
+        </p>
+      )}
+    </div>
+  </div>
+
+  <header class="sticky top-0 z-50 bg-paper/95 backdrop-blur border-b border-line">
+    <div class="s-wrap flex items-center gap-4 h-[68px]">
+      <a href={href('/')} class="flex items-center gap-2.5 min-w-0 shrink" aria-label={`${t.name} home`}>
+        {t.logoUrl ? <img src={t.logoUrl} alt="" width="40" height="40" class="size-10 rounded-full object-cover" /> : (
+          <span class="grid place-items-center size-10 shrink-0 rounded-[calc(var(--r-card)*.6)] bg-primary text-primary-ink font-display text-lg font-bold">{monogram}</span>
+        )}
+        <span class="font-display font-bold text-lg leading-tight truncate">{t.name}</span>
+      </a>
+      <nav class="hidden lg:flex items-center gap-1 ml-4" aria-label="Main">
+        {nav.map((n) => n.href === '/rentals' && rentalCats.length ? (
+          <div class="relative group">
+            <a href={href(n.href)} aria-current={isCurrent(n.href) ? 'page' : undefined} class="inline-flex items-center gap-1 px-3 min-h-11 rounded-full font-bold text-[15px] hover:bg-soft aria-[current=page]:text-primary">{n.label} <span aria-hidden="true" class="text-xs">▾</span></a>
+            <div class="invisible opacity-0 group-hover:visible group-hover:opacity-100 group-focus-within:visible group-focus-within:opacity-100 transition absolute left-0 top-full pt-2 w-[560px]">
+              <div class="s-card p-3 grid grid-cols-2 gap-1">
+                {rentalCats.map(({ c, items }) => (
+                  <a href={href(`/rentals/${c.slug}`)} class="flex items-center gap-3 rounded-xl p-2 hover:bg-soft">
+                    <img src={items[0].images[0] ?? '/demo/hero.svg'} alt="" width="56" height="42" loading="lazy" class="w-14 h-[42px] rounded-lg object-cover bg-muted" />
+                    <span class="min-w-0"><span class="block font-bold text-sm">{c.name}</span><span class="block text-xs s-sub">from {money(minPrice(items) ?? 0)}</span></span>
+                  </a>
+                ))}
+                <a href={href('/rentals')} class="col-span-2 mt-1 text-center rounded-xl p-2.5 font-extrabold text-sm text-primary hover:bg-soft">See all rentals →</a>
+              </div>
+            </div>
+          </div>
+        ) : (
+          <a href={href(n.href)} aria-current={isCurrent(n.href) ? 'page' : undefined} class="inline-flex items-center px-3 min-h-11 rounded-full font-bold text-[15px] hover:bg-soft aria-[current=page]:text-primary">{n.label}</a>
+        ))}
+      </nav>
+      <div class="ml-auto flex items-center gap-2">
+        <a href={href('/book')} class="relative grid place-items-center size-11 rounded-full hover:bg-soft" aria-label="Cart">
+          <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 4h2l2.4 11.2a2 2 0 0 0 2 1.6h7.7a2 2 0 0 0 2-1.5L21 8H6" /><circle cx="10" cy="20.5" r="1.3" /><circle cx="17" cy="20.5" r="1.3" /></svg>
+          <span data-cart-count hidden class="absolute -top-0.5 -right-0.5 min-w-5 h-5 px-1 grid place-items-center rounded-full bg-accent text-accent-ink text-[11px] font-extrabold">0</span>
+        </a>
+        <a href={href('/rentals#check')} class="hidden sm:inline-flex s-btn s-btn-cta s-btn-sm">
+          <Icon name="calendar" size={18} /> <span data-date-chip>Check Availability</span>
+        </a>
+        <details class="lg:hidden relative">
+          <summary class="list-none grid place-items-center size-11 rounded-full hover:bg-soft cursor-pointer" aria-label="Menu"><Icon name="menu" size={24} /></summary>
+          <div class="absolute right-0 top-full mt-2 w-[min(88vw,340px)] s-card p-3 grid gap-1 z-50">
+            {nav.map((n) => <a href={href(n.href)} class="flex items-center min-h-12 px-3 rounded-xl font-bold hover:bg-soft">{n.label}</a>)}
+            {rentalCats.length > 0 && (
+              <div class="mt-1 pt-2 border-t border-line grid grid-cols-2 gap-1">
+                {rentalCats.slice(0, 8).map(({ c }) => <a href={href(`/rentals/${c.slug}`)} class="flex items-center min-h-11 px-3 rounded-xl text-sm font-semibold hover:bg-soft">{c.name}</a>)}
+              </div>
+            )}
+            <a href={href('/rentals#check')} class="mt-2 s-btn s-btn-cta w-full">Check Availability</a>
+          </div>
+        </details>
+      </div>
+    </div>
+  </header>
+
+  {ctx.preview && (
+    <div class="bg-ink text-paper text-xs font-bold text-center py-1.5 px-4">Preview of {t.name}’s site on BounceOS — search engines index the live domain only.</div>
+  )}
+
+  <main id="main" class="flex-1"><slot /></main>
+
+  <footer class="mt-auto bg-ink text-paper">
+    <div class="s-wrap py-14 grid gap-10 md:grid-cols-[1.4fr_1fr_1fr_1fr]">
+      <div>
+        <p class="font-display text-2xl font-bold">{t.name}</p>
+        {site.footerBlurb && <p class="mt-3 text-sm opacity-80 max-w-sm leading-relaxed">{site.footerBlurb}</p>}
+        <address class="not-italic mt-5 grid gap-1.5 text-sm">
+          <span class="font-bold">{t.name}</span>
+          {t.addressLine && <span class="opacity-85">{t.addressLine}</span>}
+          {t.city && <span class="opacity-85">{t.city}, {t.state} {t.zip}</span>}
+          {phone && <a href={telHref(phone)} class="font-bold hover:underline inline-flex items-center gap-2 min-h-8"><Icon name="phone" size={15} /> {phone}</a>}
+          {t.email && <a href={`mailto:${t.email}`} class="hover:underline opacity-90 break-all">{t.email}</a>}
+        </address>
+        {sameAs.length > 0 && (
+          <p class="mt-4 flex gap-3 text-sm font-bold">
+            {integ.facebookPageId && <a class="hover:underline" href={sameAs.find((s) => s.includes('facebook'))} rel="noopener">Facebook</a>}
+            {integ.instagramHandle && <a class="hover:underline" href={sameAs.find((s) => s.includes('instagram'))} rel="noopener">Instagram</a>}
+            {integ.tiktokHandle && <a class="hover:underline" href={sameAs.find((s) => s.includes('tiktok'))} rel="noopener">TikTok</a>}
+          </p>
+        )}
+      </div>
+      <div>
+        <p class="font-display font-bold text-lg">Rentals</p>
+        <ul class="mt-3 grid gap-1.5 text-sm">
+          {rentalCats.map(({ c }) => <li><a href={href(`/rentals/${c.slug}`)} class="opacity-85 hover:opacity-100 hover:underline">{c.name}</a></li>)}
+          <li><a href={href('/rentals/packages')} class="opacity-85 hover:opacity-100 hover:underline">Party packages</a></li>
+        </ul>
+      </div>
+      <div>
+        <p class="font-display font-bold text-lg">Service areas</p>
+        <ul class="mt-3 grid gap-1.5 text-sm">
+          {footerCities.map((c) => <li><a href={href(`/areas/${c.slug}`)} class="opacity-85 hover:opacity-100 hover:underline">{c.local?.city ?? c.title}{c.local?.state ? `, ${c.local.state}` : ''}</a></li>)}
+          <li><a href={href('/areas')} class="font-bold hover:underline">All areas →</a></li>
+        </ul>
+      </div>
+      <div>
+        <p class="font-display font-bold text-lg">Company</p>
+        <ul class="mt-3 grid gap-1.5 text-sm">
+          <li><a href={href('/about')} class="opacity-85 hover:opacity-100 hover:underline">About us</a></li>
+          <li><a href={href('/safety')} class="opacity-85 hover:opacity-100 hover:underline">Safety & cleaning</a></li>
+          <li><a href={href('/faq')} class="opacity-85 hover:opacity-100 hover:underline">FAQ</a></li>
+          <li><a href={href('/contact')} class="opacity-85 hover:opacity-100 hover:underline">Contact & quotes</a></li>
+          <li><a href={href('/book')} class="opacity-85 hover:opacity-100 hover:underline">Your cart</a></li>
+        </ul>
+        {t.settings?.cancellationPolicy && <p class="mt-4 text-xs opacity-70 leading-relaxed">{t.settings.cancellationPolicy}</p>}
+      </div>
+    </div>
+    <div class="border-t border-white/15">
+      <div class="s-wrap py-5 flex flex-col sm:flex-row gap-2 justify-between text-xs opacity-75">
+        <p>© {year} {t.name}. All rights reserved.</p>
+        <p>Online booking powered by <a href="https://bounceos.app" class="underline" rel="noopener">BounceOS</a></p>
+      </div>
+    </div>
+  </footer>
+
+  <nav class="s-mobilebar" aria-label="Quick actions">
+    <a href={href('/rentals#check')} class="s-btn s-btn-cta !min-h-12 !px-3 text-[15px]"><Icon name="calendar" size={18} /> <span data-date-chip>Check Date</span></a>
+    {phone ? <a href={smsHref(phone)} class="s-btn s-btn-ghost !min-h-12 !px-2 text-[15px]"><Icon name="message" size={18} /> Text</a> : <a href={href('/contact')} class="s-btn s-btn-ghost !min-h-12 !px-2">Contact</a>}
+    {phone ? <a href={telHref(phone)} class="s-btn s-btn-primary !min-h-12 !px-2 text-[15px]"><Icon name="phone" size={18} /> Call</a> : <a href={href('/faq')} class="s-btn s-btn-primary !min-h-12 !px-2">FAQ</a>}
+  </nav>
+
+  <script>
+    import { loadCart, prettyDay, fetchAvailability } from '../islands/site/store';
+    const root = document.documentElement;
+    const slug = root.dataset.slug ?? '';
+    const api = root.dataset.api ?? '';
+    function paint() {
+      const c = loadCart(slug);
+      const n = c.lines.reduce((s, l) => s + l.qty, 0);
+      document.querySelectorAll<HTMLElement>('[data-cart-count]').forEach((el) => { el.textContent = String(n); el.hidden = n === 0; });
+      if (c.day) document.querySelectorAll<HTMLElement>('[data-date-chip]').forEach((el) => { el.textContent = prettyDay(c.day!); });
+      return c;
+    }
+    const c = paint();
+    window.addEventListener('bos:cart', paint);
+    // Live "2 left for Sat" badges on product cards once a date is known.
+    const badges = document.querySelectorAll<HTMLElement>('[data-avail-id]');
+    if (badges.length && c.day && !document.querySelector('[data-ssr-avail]')) {
+      fetchAvailability(api, c.day, c.startHour ?? 10, c.endHour ?? 18, c.zip).then((r) => {
+        if ('error' in r || !r.ok) return;
+        const day = prettyDay(c.day!);
+        badges.forEach((el) => {
+          const it = r.items.find((i) => i.id === el.dataset.availId);
+          if (!it) return;
+          el.hidden = false;
+          el.className = 's-chip ' + (it.free === 0 ? 's-chip-bad' : it.free === 1 ? 's-chip-warn' : 's-chip-ok');
+          el.textContent = it.free === 0 ? `Booked ${day}` : it.free === 1 ? `Last one for ${day}` : `Open ${day}`;
+        });
+      });
+    }
+  </script>
+</body>
+</html>

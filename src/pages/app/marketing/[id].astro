@@ -1,0 +1,144 @@
+---
+import { and, eq } from 'drizzle-orm';
+import { z } from 'zod';
+import AppLayout from '../../../layouts/AppLayout.astro';
+import Icon from '../../../components/Icon.astro';
+import { getDb, schema } from '../../../db/client';
+import { formData, str, int, parse } from '../../../lib/forms';
+import { merge } from '../../../lib/notify';
+import { SEGMENTS, MERGE_TAGS, segmentCustomers, segmentLabel, sendCampaignNow, mergeVarsFor, recentCampaignMessages } from '../../../lib/growth/campaigns';
+import { ctx, done, fmtDateTime, parseLocalDateTime, toLocalInput } from '../../../lib/growth/app';
+
+const { t, tenantId, canEdit } = ctx(Astro);
+const id = Astro.params.id ?? '';
+if (!z.uuid().safeParse(id).success) return Astro.redirect('/app/marketing');
+const db = await getDb();
+const load = async () => (await db.select().from(schema.campaigns).where(and(eq(schema.campaigns.id, id), eq(schema.campaigns.tenantId, tenantId))).limit(1))[0];
+const camp = await load();
+if (!camp) return Astro.redirect('/app/marketing');
+const isAuto = camp.kind !== 'broadcast';
+const locked = camp.status === 'sent' || camp.status === 'sending';
+
+const Edit = z.object({
+  name: z.string().min(3).max(100),
+  subject: z.string().max(150),
+  body: z.string().min(5, 'Write a message').max(5000),
+  segment: z.string().refine((s) => SEGMENTS.some((x) => x.key === s)),
+  notBookedDays: z.number().int().min(7).max(3650),
+});
+
+const f = await formData(Astro);
+if (f) {
+  if (!canEdit) return done(Astro, 'Only owners and managers can manage campaigns.', undefined, 'error');
+  const action = str(f, '_action', 20);
+  if (action === 'save' || action === 'send' || action === 'schedule') {
+    if (locked) return done(Astro, 'This campaign was already sent. Duplicate it to send again.', undefined, 'error');
+    const r = parse(Edit, { name: str(f, 'name', 100), subject: str(f, 'subject', 150), body: str(f, 'body', 5000), segment: str(f, 'segment', 20) || 'all', notBookedDays: int(f, 'notBookedDays', 180) });
+    if (!r.ok) return done(Astro, Object.values(r.errors)[0], undefined, 'error');
+    if (camp.channel === 'sms' && r.data.body.length > 480) return done(Astro, 'SMS messages should be under 480 characters (3 segments).', undefined, 'error');
+    if (camp.channel === 'email' && !r.data.subject) return done(Astro, 'Emails need a subject line.', undefined, 'error');
+    const segment = isAuto ? camp.segment : { type: r.data.segment, ...(r.data.segment === 'dormant' ? { notBookedDays: r.data.notBookedDays } : {}) };
+    await db.update(schema.campaigns).set({ name: r.data.name, subject: r.data.subject, body: r.data.body, segment }).where(and(eq(schema.campaigns.id, id), eq(schema.campaigns.tenantId, tenantId)));
+    if (action === 'save') return done(Astro, 'Saved.');
+    if (isAuto) return done(Astro, 'Automations send on their own — toggle them on from Campaigns.', undefined, 'error');
+    if (action === 'schedule') {
+      const at = parseLocalDateTime(str(f, 'scheduledAt', 20), t.timezone);
+      if (!at || at.getTime() < Date.now() + 60_000) return done(Astro, 'Pick a time at least a minute from now.', undefined, 'error');
+      if (at.getTime() > Date.now() + 365 * 86_400_000) return done(Astro, 'Schedule within the next year.', undefined, 'error');
+      await db.update(schema.campaigns).set({ status: 'scheduled', scheduledAt: at }).where(and(eq(schema.campaigns.id, id), eq(schema.campaigns.tenantId, tenantId)));
+      return done(Astro, `Scheduled for ${fmtDateTime(at, t.timezone)}.`);
+    }
+    const n = await sendCampaignNow(db, t, id);
+    return done(Astro, n ? `Sent to ${n} opted-in customer${n === 1 ? '' : 's'}.` : 'Nobody in this segment has opted in yet — nothing was sent.', undefined, n ? 'ok' : 'error');
+  }
+  if (action === 'unschedule') {
+    await db.update(schema.campaigns).set({ status: 'draft', scheduledAt: null }).where(and(eq(schema.campaigns.id, id), eq(schema.campaigns.tenantId, tenantId), eq(schema.campaigns.status, 'scheduled')));
+    return done(Astro, 'Back to draft.');
+  }
+  if (action === 'duplicate') {
+    const [row] = await db.insert(schema.campaigns).values({ tenantId, name: `${camp.name} (copy)`.slice(0, 100), channel: camp.channel, kind: 'broadcast', segment: camp.segment, subject: camp.subject, body: camp.body, status: 'draft' }).returning({ id: schema.campaigns.id });
+    return done(Astro, 'Duplicated as a new draft.', `/app/marketing/${row.id}`);
+  }
+  if (action === 'delete') {
+    if (isAuto) return done(Astro, 'Turn automations off instead of deleting them.', undefined, 'error');
+    await db.delete(schema.campaigns).where(and(eq(schema.campaigns.id, id), eq(schema.campaigns.tenantId, tenantId)));
+    return done(Astro, 'Campaign deleted.', '/app/marketing');
+  }
+  return done(Astro, 'Unknown action.', undefined, 'error');
+}
+
+const recipients = isAuto ? [] : await segmentCustomers(db, tenantId, camp.segment, camp.channel);
+const sample = recipients[0] ?? (await db.select().from(schema.customers).where(eq(schema.customers.tenantId, tenantId)).limit(1))[0] ?? null;
+const vars = await mergeVarsFor(t, sample, { channel: camp.channel, campaignId: camp.id, extra: { item: 'Rainbow Castle Bounce House', event_date: 'Saturday, June 14' } });
+const recent = await recentCampaignMessages(db, tenantId, id, 15);
+const segKey = camp.segment.type ?? 'all';
+const defaultSchedule = toLocalInput(camp.scheduledAt ?? new Date(Date.now() + 86_400_000), t.timezone);
+---
+<AppLayout title={camp.name} section="marketing" subtitle={`${camp.channel.toUpperCase()} · ${isAuto ? 'Automation' : segmentLabel(camp.segment)} · ${camp.status}${camp.status === 'scheduled' ? ' for ' + fmtDateTime(camp.scheduledAt, t.timezone) : ''}`}>
+  <a slot="actions" href="/app/marketing" class="btn-ghost">← Campaigns</a>
+  <div class="grid gap-6 lg:grid-cols-[1fr_360px]">
+    <form method="post" class="card p-4 sm:p-6 space-y-4">
+      <div><label class="label" for="name">Name</label><input class="input" id="name" name="name" value={camp.name} required maxlength="100" disabled={locked} /></div>
+      {!isAuto && (
+        <div class="grid gap-3 sm:grid-cols-[1fr_140px]">
+          <div><label class="label" for="segment">Segment</label><select class="input" id="segment" name="segment" disabled={locked}>{SEGMENTS.map((s) => <option value={s.key} selected={segKey === s.key}>{s.label}</option>)}</select></div>
+          <div><label class="label" for="notBookedDays">N days</label><input class="input" type="number" id="notBookedDays" name="notBookedDays" value={camp.segment.notBookedDays ?? 180} min="7" max="3650" disabled={locked} /></div>
+        </div>
+      )}
+      {camp.channel === 'email' && <div><label class="label" for="subject">Subject</label><input class="input" id="subject" name="subject" value={camp.subject} maxlength="150" disabled={locked} /></div>}
+      <div>
+        <label class="label" for="body">Message</label>
+        <textarea class="input font-mono text-sm" id="body" name="body" rows={camp.channel === 'sms' ? 4 : 10} maxlength={camp.channel === 'sms' ? 480 : 5000} disabled={locked}>{camp.body}</textarea>
+        <p class="hint">Merge tags: {MERGE_TAGS.map((m) => <code class="mr-1">{`{{${m}}}`}</code>)}{camp.kind === 'abandoned' && <><code class="mr-1">{'{{item}}'}</code><code>{'{{event_date}}'}</code></>}{camp.channel === 'sms' && ' · “Reply STOP to opt out” is added automatically.'}</p>
+      </div>
+      {canEdit && !locked && (
+        <div class="flex flex-wrap gap-2 pt-2 border-t border-line">
+          <button class="btn-ghost" name="_action" value="save">Save</button>
+          {!isAuto && <>
+            <button class="btn-primary" name="_action" value="send" onclick={`return confirm('Send to ${recipients.length} opted-in customers now?')`}><Icon name="bolt" size={16} />Send now · {recipients.length}</button>
+            <div class="flex items-center gap-2 ml-auto">
+              <label class="sr-only" for="scheduledAt">Send at</label>
+              <input class="input w-auto" type="datetime-local" id="scheduledAt" name="scheduledAt" value={defaultSchedule} />
+              <button class="btn-ghost" name="_action" value="schedule"><Icon name="clock" size={16} />Schedule</button>
+            </div>
+          </>}
+        </div>
+      )}
+      {locked && <p class="rounded-xl bg-green-50 text-green-800 text-sm px-3 py-2">Sent to {camp.sentCount} customers. Duplicate it to send a new version.</p>}
+    </form>
+
+    <aside class="space-y-4">
+      <div class="card p-4">
+        <h2 class="font-bold text-sm mb-2">Preview{sample ? ` for ${sample.name || sample.email}` : ''}</h2>
+        {camp.channel === 'email' ? (
+          <div class="rounded-xl border border-line p-3 text-sm">
+            <p class="font-semibold">{merge(camp.subject, vars)}</p>
+            <p class="text-xs text-ink-2 mb-2">From {t.name}</p>
+            <p class="whitespace-pre-line text-ink-2 break-words">{merge(camp.body, vars)}</p>
+          </div>
+        ) : (
+          <div class="rounded-2xl bg-canvas p-3"><p class="rounded-2xl rounded-bl-sm bg-white border border-line px-3 py-2 text-sm whitespace-pre-line break-words">{merge(camp.body, vars)}{'\n'}Reply STOP to opt out.</p></div>
+        )}
+      </div>
+      <div class="card p-4 grid grid-cols-2 gap-3 text-center">
+        <div><p class="kpi-label">Sent</p><p class="kpi-value">{camp.sentCount}</p></div>
+        <div><p class="kpi-label">Bookings</p><p class="kpi-value text-mint">{camp.bookingsAttributed}</p></div>
+        <div><p class="kpi-label">Opens</p><p class="kpi-value">{camp.openCount}</p></div>
+        <div><p class="kpi-label">Clicks</p><p class="kpi-value">{camp.clickCount}</p></div>
+      </div>
+      {camp.status === 'scheduled' && canEdit && <form method="post"><input type="hidden" name="_action" value="unschedule" /><button class="btn-ghost w-full">Cancel schedule</button></form>}
+      {canEdit && <div class="flex gap-2">
+        <form method="post" class="flex-1"><input type="hidden" name="_action" value="duplicate" /><button class="btn-ghost w-full">Duplicate</button></form>
+        {!isAuto && <form method="post" class="flex-1" onsubmit="return confirm('Delete this campaign?')"><input type="hidden" name="_action" value="delete" /><button class="btn-danger w-full">Delete</button></form>}
+      </div>}
+      <div class="card overflow-hidden">
+        <h2 class="font-bold text-sm px-4 py-3 border-b border-line">Recent sends</h2>
+        {recent.length === 0 ? <p class="px-4 py-3 text-xs text-ink-2">None yet.</p> : (
+          <ul class="divide-y divide-line text-xs">
+            {recent.map((m) => <li class="px-4 py-2 flex gap-2"><span class="truncate flex-1">{m.to}</span><span class:list={['chip', m.status === 'failed' ? 'bg-red-50 text-red-800' : m.status === 'logged' ? 'bg-canvas text-ink-2' : 'bg-green-50 text-green-800']} title={m.status === 'logged' ? 'Logged — no email/SMS provider configured' : undefined}>{m.status}</span></li>)}
+          </ul>
+        )}
+      </div>
+    </aside>
+  </div>
+</AppLayout>

@@ -1,0 +1,20 @@
+---
+interface Props { props: Record<string, unknown>; faqs?: { q: string; a: string }[] }
+const { props: p } = Astro.props;
+const faqs = Astro.props.faqs ?? ((Array.isArray(p.faqs) ? p.faqs : []) as { q: string; a: string }[]);
+---
+{faqs.length > 0 && (
+<section class="s-wrap s-section" id="faq">
+  <div class="grid lg:grid-cols-[.7fr_1.3fr] gap-8 lg:gap-14">
+    <h2 class="s-h2">{String(p.title ?? 'Frequently asked questions')}</h2>
+    <div class="border-t border-line">
+      {faqs.map((f, i) => (
+        <details class="s-faq" open={i === 0}>
+          <summary>{f.q}</summary>
+          <p>{f.a}</p>
+        </details>
+      ))}
+    </div>
+  </div>
+</section>
+)}

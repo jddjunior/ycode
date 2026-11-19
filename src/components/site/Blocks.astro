@@ -1,0 +1,44 @@
+---
+/** Renders a page's CMS blocks in order. Unknown block types are skipped. */
+import type { Block, LocalFacts } from '../../db/schema';
+import type { SiteCtx } from '../../lib/site/data';
+import Hero from './blocks/Hero.astro';
+import Trust from './blocks/Trust.astro';
+import Categories from './blocks/Categories.astro';
+import Featured from './blocks/Featured.astro';
+import Packages from './blocks/Packages.astro';
+import Steps from './blocks/Steps.astro';
+import Reviews from './blocks/Reviews.astro';
+import Areas from './blocks/Areas.astro';
+import Faq from './blocks/Faq.astro';
+import Cta from './blocks/Cta.astro';
+import RichText from './blocks/RichText.astro';
+import Contact from './blocks/Contact.astro';
+import Local from './blocks/Local.astro';
+interface Props { ctx: SiteCtx; blocks: Block[]; local?: LocalFacts | null; pageSlug?: string; extraFaqs?: { q: string; a: string }[] }
+const { ctx, blocks, local, pageSlug, extraFaqs = [] } = Astro.props;
+const city = local?.city;
+// City FAQs go just before the nearby-areas / final CTA section.
+const list = blocks.filter((b) => b && typeof b.type === 'string');
+const faqAt = extraFaqs.length && !list.some((b) => b.type === 'faq') ? list.findIndex((b) => b.type === 'areas' || b.type === 'cta') : -1;
+---
+{list.map((b, i) => (
+  <>
+    {i === faqAt && <Faq props={{ title: city ? `${city} party rental FAQ` : 'FAQ' }} faqs={extraFaqs} />}
+    {b.type === 'hero' ? <Hero ctx={ctx} props={b.props} city={city} />
+      : b.type === 'trust' ? <Trust props={b.props} />
+      : b.type === 'categories' ? <Categories ctx={ctx} props={b.props} />
+      : b.type === 'featured' ? <Featured ctx={ctx} props={b.props} />
+      : b.type === 'packages' ? <Packages ctx={ctx} props={b.props} />
+      : b.type === 'steps' ? <Steps ctx={ctx} props={b.props} />
+      : b.type === 'reviews' ? <Reviews ctx={ctx} props={b.props} city={city} />
+      : b.type === 'areas' ? <Areas ctx={ctx} props={b.props} exclude={pageSlug} />
+      : b.type === 'faq' ? <Faq props={b.props} />
+      : b.type === 'cta' ? <Cta ctx={ctx} props={b.props} idx={i} />
+      : b.type === 'richtext' ? <RichText props={b.props} />
+      : b.type === 'contact' ? <Contact ctx={ctx} props={b.props} />
+      : b.type === 'local' ? <Local ctx={ctx} local={local} />
+      : null}
+  </>
+))}
+{faqAt === -1 && extraFaqs.length > 0 && !blocks.some((b) => b.type === 'faq') && <Faq props={{ title: city ? `${city} party rental FAQ` : 'FAQ' }} faqs={extraFaqs} />}

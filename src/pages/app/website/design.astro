@@ -1,0 +1,175 @@
+---
+import { eq } from 'drizzle-orm';
+import { z } from 'zod';
+import AppLayout from '../../../layouts/AppLayout.astro';
+import Tabs from './_Tabs.astro';
+import { getDb, schema } from '../../../db/client';
+import type { ThemeTokens } from '../../../db/schema';
+import { formData, str, parse } from '../../../lib/forms';
+import { THEMES, isHex, themeFor } from '../../../lib/themes';
+import { invalidateTenantCache, siteOrigin } from '../../../lib/tenant';
+import { ctx, done } from '../../../lib/growth/app';
+
+const { t, tenantId, canEdit } = ctx(Astro);
+const db = await getDb();
+let [site] = await db.select().from(schema.sites).where(eq(schema.sites.tenantId, tenantId)).limit(1);
+if (!site) {
+  const { label: _l, mood: _m, fontsHref: _f, ...tokens } = THEMES.carnival;
+  [site] = await db.insert(schema.sites).values({ tenantId, theme: tokens }).returning();
+}
+
+const FONT_OK = /^[\w\s'",.-]{1,120}$/;
+const COLOR_KEYS = ['primary', 'primaryInk', 'accent', 'accentInk', 'ink', 'paper', 'muted'] as const;
+const COLOR_LABEL: Record<(typeof COLOR_KEYS)[number], string> = { primary: 'Primary', primaryInk: 'Text on primary', accent: 'Accent', accentInk: 'Text on accent', ink: 'Body text', paper: 'Background', muted: 'Muted surfaces' };
+const FONTS = [...new Set(Object.values(THEMES).flatMap((th) => [th.fontDisplay, th.fontBody]))];
+const href = (s: string) => s === '' || /^\/[\w\-./?=&#%]*$/.test(s) || /^https:\/\/[^\s"'<>]+$/.test(s);
+
+const NavItem = z.object({ label: z.string().trim().min(1).max(40), href: z.string().trim().max(300).refine(href, 'Links must start with / or https://') });
+const General = z.object({
+  announcement: z.string().max(160),
+  footerBlurb: z.string().max(500),
+  titleTemplate: z.string().max(80).refine((s) => s.includes('%s'), 'Title template must include %s (the page title)'),
+  defaultDescription: z.string().max(170),
+  ogImage: z.string().max(500).refine((s) => s === '' || href(s), 'Image must be a /path or https:// URL'),
+  nav: z.array(NavItem).max(8),
+});
+
+const f = await formData(Astro);
+if (f) {
+  if (!canEdit) return done(Astro, 'Only owners and managers can edit the website.', undefined, 'error');
+  const action = str(f, '_action', 20);
+  if (action === 'theme') {
+    const preset = str(f, 'preset', 30);
+    const base = THEMES[preset];
+    if (!base) return done(Astro, 'Unknown theme.', undefined, 'error');
+    const useOverrides = str(f, 'mode', 10) === 'custom';
+    const { label: _l, mood: _m, fontsHref: _f, ...tokens } = base;
+    const next: ThemeTokens = { ...tokens };
+    if (useOverrides) {
+      for (const k of COLOR_KEYS) {
+        const v = str(f, k, 7);
+        if (v && !isHex(v)) return done(Astro, `${COLOR_LABEL[k]} must be a hex colour like #2563EB.`, undefined, 'error');
+        if (v) next[k] = v.toUpperCase();
+      }
+      const fd = str(f, 'fontDisplay', 120), fb = str(f, 'fontBody', 120);
+      if ((fd && !FONT_OK.test(fd)) || (fb && !FONT_OK.test(fb))) return done(Astro, 'Fonts may only contain letters, numbers, spaces, quotes and commas.', undefined, 'error');
+      if (fd) next.fontDisplay = fd;
+      if (fb) next.fontBody = fb;
+      const radius = str(f, 'radius', 10);
+      if (radius === 'soft' || radius === 'round' || radius === 'pill') next.radius = radius;
+    }
+    await db.update(schema.sites).set({ theme: next, updatedAt: new Date() }).where(eq(schema.sites.tenantId, tenantId));
+    invalidateTenantCache();
+    return done(Astro, useOverrides ? 'Theme and overrides saved.' : `Switched to ${base.label}.`);
+  }
+  if (action === 'general') {
+    const labels = f.getAll('navLabel').map(String), hrefs = f.getAll('navHref').map(String);
+    const nav = labels.map((label, i) => ({ label: label.trim(), href: (hrefs[i] ?? '').trim() })).filter((n) => n.label || n.href);
+    const r = parse(General, { announcement: str(f, 'announcement', 400), footerBlurb: str(f, 'footerBlurb', 1000), titleTemplate: str(f, 'titleTemplate', 200), defaultDescription: str(f, 'defaultDescription', 400), ogImage: str(f, 'ogImage', 600), nav });
+    if (!r.ok) return done(Astro, Object.entries(r.errors).map(([k, v]) => `${k}: ${v}`)[0], undefined, 'error');
+    await db.update(schema.sites).set({ ...r.data, announcement: r.data.announcement || null, ogImage: r.data.ogImage || null, updatedAt: new Date() }).where(eq(schema.sites.tenantId, tenantId));
+    return done(Astro, 'Navigation and SEO defaults saved.');
+  }
+  return done(Astro, 'Unknown action.', undefined, 'error');
+}
+
+const th = themeFor(site.theme);
+const origin = await siteOrigin(t);
+const navRows = [...site.nav, ...Array.from({ length: Math.max(0, 8 - site.nav.length) }, () => ({ label: '', href: '' }))].slice(0, 8);
+const fontLinks = Object.values(THEMES).map((x) => x.fontsHref);
+---
+<AppLayout title="Website" section="website" subtitle="Pick a look, tune your brand colours, and set the defaults every page inherits.">
+  <a slot="actions" href={origin + '/'} target="_blank" rel="noopener" class="btn-ghost">View site</a>
+  {fontLinks.map((h) => <link rel="stylesheet" href={h} />)}
+  <Tabs active="design" />
+
+  <form method="post" class="card p-4 sm:p-6 mb-6">
+    <input type="hidden" name="_action" value="theme" />
+    <h2 class="font-bold text-lg">Theme</h2>
+    <p class="text-sm text-ink-2 mb-4">Four research-backed directions. Switching keeps your content.</p>
+    <fieldset>
+      <legend class="sr-only">Theme preset</legend>
+      <div class="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
+        {Object.entries(THEMES).map(([k, p]) => (
+          <label class="relative block rounded-2xl border-2 border-line p-3 cursor-pointer has-[:checked]:border-brand has-[:checked]:ring-4 has-[:checked]:ring-brand/15">
+            <input type="radio" name="preset" value={k} checked={site.theme.preset === k} class="sr-only" />
+            <div class="rounded-xl p-4 h-28 flex flex-col justify-between" style={`background:${p.paper};color:${p.ink};border-radius:${p.radius === 'pill' ? '22px' : p.radius === 'round' ? '16px' : '10px'}`}>
+              <p class="text-lg leading-tight" style={`font-family:${p.fontDisplay};font-weight:700`}>Bounce rentals</p>
+              <div class="flex gap-2">
+                <span class="px-3 py-1 text-xs font-bold" style={`background:${p.primary};color:${p.primaryInk};border-radius:${p.radius === 'pill' ? '999px' : '8px'}`}>Book now</span>
+                <span class="px-3 py-1 text-xs font-bold" style={`background:${p.accent};color:${p.accentInk};border-radius:${p.radius === 'pill' ? '999px' : '8px'}`}>Deals</span>
+              </div>
+            </div>
+            <p class="font-semibold mt-2 text-sm">{p.label}</p>
+            <p class="text-xs text-ink-2">{p.mood}</p>
+          </label>
+        ))}
+      </div>
+    </fieldset>
+
+    <details class="mt-5 rounded-xl border border-line" open={site.theme.primary !== THEMES[site.theme.preset]?.primary || undefined}>
+      <summary class="cursor-pointer px-4 py-3 font-semibold text-sm">Brand colour & font overrides</summary>
+      <div class="px-4 pb-4 space-y-4">
+        <div class="flex flex-wrap gap-4 text-sm">
+          <label class="flex items-center gap-2"><input type="radio" name="mode" value="preset" class="accent-[var(--color-brand)]" checked />Use preset colours</label>
+          <label class="flex items-center gap-2"><input type="radio" name="mode" value="custom" class="accent-[var(--color-brand)]" />Apply my overrides below</label>
+        </div>
+        <div class="grid gap-3 grid-cols-2 sm:grid-cols-4 lg:grid-cols-7">
+          {COLOR_KEYS.map((k) => (
+            <div>
+              <label class="label text-xs" for={`c-${k}`}>{COLOR_LABEL[k]}</label>
+              <div class="flex items-center gap-2">
+                <input type="color" aria-label={`${COLOR_LABEL[k]} picker`} value={th[k]} class="size-11 rounded-lg border border-line shrink-0 cursor-pointer" data-sync={`c-${k}`} />
+                <input class="input font-mono text-xs px-2" id={`c-${k}`} name={k} value={th[k]} pattern="#[0-9a-fA-F]{6}" maxlength="7" />
+              </div>
+            </div>
+          ))}
+        </div>
+        <div class="grid gap-3 sm:grid-cols-3">
+          <div><label class="label" for="fontDisplay">Display font</label><input class="input" id="fontDisplay" name="fontDisplay" list="fontlist" value={th.fontDisplay} maxlength="120" /></div>
+          <div><label class="label" for="fontBody">Body font</label><input class="input" id="fontBody" name="fontBody" list="fontlist" value={th.fontBody} maxlength="120" /></div>
+          <div><label class="label" for="radius">Corner style</label>
+            <select class="input" id="radius" name="radius">{(['soft', 'round', 'pill'] as const).map((r) => <option value={r} selected={th.radius === r}>{r}</option>)}</select></div>
+          <datalist id="fontlist">{FONTS.map((x) => <option value={x} />)}</datalist>
+        </div>
+        <p class="hint">Keep strong contrast between text and background (4.5:1) so parents can read your site in the sun.</p>
+      </div>
+    </details>
+    {canEdit && <div class="mt-4 flex justify-end"><button class="btn-primary">Save theme</button></div>}
+  </form>
+
+  <form method="post" class="card p-4 sm:p-6 grid gap-6 lg:grid-cols-2">
+    <input type="hidden" name="_action" value="general" />
+    <div class="space-y-3">
+      <h2 class="font-bold text-lg">Navigation</h2>
+      <p class="text-sm text-ink-2">Up to 8 links. Use paths like <code>/rentals</code> or full https:// URLs. Leave a row blank to remove it.</p>
+      <div class="space-y-2">
+        {navRows.map((n, i) => (
+          <div class="grid grid-cols-[1fr_1.4fr] gap-2">
+            <input class="input" name="navLabel" value={n.label} maxlength="40" aria-label={`Link ${i + 1} label`} placeholder="Label" />
+            <input class="input" name="navHref" value={n.href} maxlength="300" aria-label={`Link ${i + 1} URL`} placeholder="/rentals" />
+          </div>
+        ))}
+      </div>
+    </div>
+    <div class="space-y-3">
+      <h2 class="font-bold text-lg">Announcement, footer & SEO defaults</h2>
+      <div><label class="label" for="announcement">Announcement bar</label><input class="input" id="announcement" name="announcement" value={site.announcement ?? ''} maxlength="160" placeholder="Now booking spring dates!" /><p class="hint">Leave empty to hide.</p></div>
+      <div><label class="label" for="footerBlurb">Footer blurb</label><textarea class="input" id="footerBlurb" name="footerBlurb" maxlength="500" rows="3">{site.footerBlurb}</textarea></div>
+      <div><label class="label" for="titleTemplate">Title template</label><input class="input font-mono text-xs" id="titleTemplate" name="titleTemplate" value={site.titleTemplate} maxlength="80" required /><p class="hint"><code>%s</code> = page title, <code>{'{business}'}</code> = {t.name}. Long titles drop the suffix automatically.</p></div>
+      <div><label class="label" for="defaultDescription">Default meta description</label><textarea class="input" id="defaultDescription" name="defaultDescription" maxlength="170" rows="3">{site.defaultDescription}</textarea><p class="hint">{site.defaultDescription.length}/160 characters. Used when a page has none.</p></div>
+      <div><label class="label" for="ogImage">Social share image</label><input class="input" id="ogImage" name="ogImage" value={site.ogImage ?? ''} maxlength="500" placeholder="https://…/share.jpg" /></div>
+    </div>
+    {canEdit && <div class="lg:col-span-2 flex justify-end"><button class="btn-primary">Save navigation & defaults</button></div>}
+  </form>
+
+  <script>
+    document.querySelectorAll<HTMLInputElement>('input[type=color][data-sync]').forEach((picker) => {
+      const text = document.getElementById(picker.dataset.sync!) as HTMLInputElement | null;
+      if (!text) return;
+      const custom = document.querySelector<HTMLInputElement>('input[name=mode][value=custom]');
+      picker.addEventListener('input', () => { text.value = picker.value.toUpperCase(); if (custom) custom.checked = true; });
+      text.addEventListener('input', () => { if (/^#[0-9a-fA-F]{6}$/.test(text.value)) picker.value = text.value; if (custom) custom.checked = true; });
+    });
+  </script>
+</AppLayout>

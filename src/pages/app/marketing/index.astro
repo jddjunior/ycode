@@ -1,0 +1,150 @@
+---
+import { and, desc, eq, gte, sql } from 'drizzle-orm';
+import { z } from 'zod';
+import AppLayout from '../../../layouts/AppLayout.astro';
+import Icon from '../../../components/Icon.astro';
+import Tabs from './_Tabs.astro';
+import { getDb, schema } from '../../../db/client';
+import { formData, str, int, parse } from '../../../lib/forms';
+import { SEGMENTS, MERGE_TAGS, AUTOMATIONS, ensureAutomations, segmentLabel, segmentCustomers } from '../../../lib/growth/campaigns';
+import { ctx, done, fmtDateTime } from '../../../lib/growth/app';
+
+const { t, tenantId, canEdit } = ctx(Astro);
+const db = await getDb();
+
+const Create = z.object({
+  name: z.string().min(3, 'Give the campaign a name').max(100),
+  channel: z.enum(['email', 'sms']),
+  segment: z.string().refine((s) => SEGMENTS.some((x) => x.key === s), 'Pick a segment'),
+  notBookedDays: z.number().int().min(7).max(3650),
+});
+
+const f = await formData(Astro);
+if (f) {
+  if (!canEdit) return done(Astro, 'Only owners and managers can manage campaigns.', undefined, 'error');
+  const action = str(f, '_action', 20);
+  if (action === 'create') {
+    const r = parse(Create, { name: str(f, 'name', 100), channel: str(f, 'channel', 5), segment: str(f, 'segment', 20), notBookedDays: int(f, 'notBookedDays', 180) });
+    if (!r.ok) return done(Astro, Object.values(r.errors)[0], undefined, 'error');
+    const sms = r.data.channel === 'sms';
+    const [row] = await db.insert(schema.campaigns).values({
+      tenantId, name: r.data.name, channel: r.data.channel, kind: 'broadcast', status: 'draft',
+      segment: { type: r.data.segment, ...(r.data.segment === 'dormant' ? { notBookedDays: r.data.notBookedDays } : {}) },
+      subject: sms ? '' : `Weekend dates are filling up, {{first_name}}`,
+      body: sms ? 'Hi {{first_name}}! {{business}} has a few weekend dates left this month. Book in 2 min: {{book_url}}' : 'Hi {{first_name}},\n\nWe still have a few weekend dates open this month — bounce houses, water slides and combos, delivered and set up.\n\nCheck your date: {{book_url}}\n\nThanks for being part of the {{business}} family!',
+    }).returning({ id: schema.campaigns.id });
+    return done(Astro, 'Campaign created. Edit the message, then send or schedule it.', `/app/marketing/${row.id}`);
+  }
+  if (action === 'toggle') {
+    const id = str(f, 'id', 40);
+    if (!z.uuid().safeParse(id).success) return done(Astro, 'Unknown automation.', undefined, 'error');
+    const on = str(f, 'on', 5) === '1';
+    const [row] = await db.update(schema.campaigns).set({ status: on ? 'automated' : 'draft' })
+      .where(and(eq(schema.campaigns.id, id), eq(schema.campaigns.tenantId, tenantId), sql`${schema.campaigns.kind} <> 'broadcast'`)).returning();
+    if (!row) return done(Astro, 'Unknown automation.', undefined, 'error');
+    return done(Astro, `${row.name} is now ${on ? 'on' : 'off'}.`, '/app/marketing#automations');
+  }
+  return done(Astro, 'Unknown action.', undefined, 'error');
+}
+
+const autos = await ensureAutomations(db, tenantId);
+const broadcasts = await db.select().from(schema.campaigns).where(and(eq(schema.campaigns.tenantId, tenantId), eq(schema.campaigns.kind, 'broadcast'))).orderBy(desc(schema.campaigns.createdAt)).limit(100);
+const all = [...autos, ...broadcasts];
+const since = new Date(Date.now() - 30 * 86_400_000);
+const [m30] = await db.select({ n: sql<number>`count(*)::int`, email: sql<number>`count(*) filter (where ${schema.messages.channel} = 'email')::int`, sms: sql<number>`count(*) filter (where ${schema.messages.channel} = 'sms')::int` })
+  .from(schema.messages).where(and(eq(schema.messages.tenantId, tenantId), gte(schema.messages.createdAt, since)));
+const totals = all.reduce((a, c) => ({ sent: a.sent + c.sentCount, open: a.open + c.openCount, click: a.click + c.clickCount, booked: a.booked + c.bookingsAttributed }), { sent: 0, open: 0, click: 0, booked: 0 });
+const [aud] = await db.select({ email: sql<number>`count(*) filter (where ${schema.customers.marketingOptIn})::int`, sms: sql<number>`count(*) filter (where ${schema.customers.smsOptIn})::int`, all: sql<number>`count(*)::int` })
+  .from(schema.customers).where(eq(schema.customers.tenantId, tenantId));
+const recips = Object.fromEntries(await Promise.all(broadcasts.filter((c) => c.status === 'draft' || c.status === 'scheduled').map(async (c) => [c.id, (await segmentCustomers(db, tenantId, c.segment, c.channel)).length] as const)));
+const STATUS: Record<string, string> = { draft: 'bg-canvas text-ink-2', scheduled: 'bg-sky-100 text-sky-800', sending: 'bg-sun/30 text-[#7A5200]', sent: 'bg-green-50 text-green-800', automated: 'bg-brand-soft text-brand' };
+const rate = (a: number, b: number) => (b ? `${Math.round((a / b) * 100)}%` : '—');
+---
+<AppLayout title="Campaigns & Reviews" section="marketing" subtitle="Email & SMS that fill weekends — birthdays, re-books, reviews and promos — without a separate HighLevel bill.">
+  <Tabs active="campaigns" />
+
+  <div class="grid gap-3 grid-cols-2 lg:grid-cols-5 mb-6">
+    <div class="kpi"><p class="kpi-label">Audience</p><p class="kpi-value">{aud.email}<span class="text-sm text-ink-2 font-medium"> email · {aud.sms} SMS</span></p><p class="hint">opted in of {aud.all} customers</p></div>
+    <div class="kpi"><p class="kpi-label">Messages (30d)</p><p class="kpi-value">{m30.n}</p><p class="hint">{m30.email} email · {m30.sms} SMS</p></div>
+    <div class="kpi"><p class="kpi-label">Open rate</p><p class="kpi-value">{rate(totals.open, totals.sent)}</p></div>
+    <div class="kpi"><p class="kpi-label">Click rate</p><p class="kpi-value">{rate(totals.click, totals.sent)}</p></div>
+    <div class="kpi col-span-2 lg:col-span-1"><p class="kpi-label">Bookings attributed</p><p class="kpi-value text-mint">{totals.booked}</p></div>
+  </div>
+
+  <section id="automations" class="mb-6 scroll-mt-24" aria-labelledby="auto-h">
+    <div class="flex items-end gap-2 mb-3"><h2 id="auto-h" class="font-bold text-lg">Automations</h2><p class="text-sm text-ink-2">Set once, run every day.</p></div>
+    <div class="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
+      {AUTOMATIONS.map((a) => {
+        const c = autos.find((x) => x.kind === a.kind)!;
+        const on = c.status === 'automated';
+        return (
+          <div class:list={['card p-4 flex flex-col', on && 'ring-2 ring-brand/20']}>
+            <div class="flex items-start gap-2">
+              <span class:list={['grid place-items-center size-9 rounded-xl shrink-0', on ? 'bg-brand text-white' : 'bg-canvas text-ink-2']}><Icon name={a.kind === 'birthday' ? 'gift' : a.kind === 'review' ? 'star' : a.kind === 'abandoned' ? 'clock' : 'sparkle'} size={18} /></span>
+              <div class="min-w-0">
+                <p class="font-semibold text-sm leading-tight">{c.name}</p>
+                <p class="text-xs text-ink-2 mt-0.5">{a.when} · {c.channel.toUpperCase()}</p>
+              </div>
+            </div>
+            <p class="text-xs text-ink-2 mt-3 flex-1">{c.sentCount} sent{c.bookingsAttributed ? ` · ${c.bookingsAttributed} bookings` : ''}</p>
+            <div class="flex items-center gap-2 mt-3">
+              {canEdit && (
+                <form method="post">
+                  <input type="hidden" name="_action" value="toggle" /><input type="hidden" name="id" value={c.id} /><input type="hidden" name="on" value={on ? '0' : '1'} />
+                  <button role="switch" aria-checked={on ? 'true' : 'false'} aria-label={`${c.name}: ${on ? 'on' : 'off'}`} class:list={['relative inline-flex h-7 w-12 items-center rounded-full transition-colors cursor-pointer', on ? 'bg-brand' : 'bg-line']}>
+                    <span class:list={['inline-block size-5 rounded-full bg-white shadow transition-transform', on ? 'translate-x-6' : 'translate-x-1']}></span>
+                  </button>
+                </form>
+              )}
+              <span class="text-xs font-semibold">{on ? 'On' : 'Off'}</span>
+              <a class="ml-auto text-xs text-brand font-semibold" href={`/app/marketing/${c.id}`}>Edit message</a>
+            </div>
+          </div>
+        );
+      })}
+    </div>
+  </section>
+
+  <div class="grid gap-6 lg:grid-cols-[1fr_340px]">
+    <section class="card overflow-hidden" aria-labelledby="camp-h">
+      <h2 id="camp-h" class="font-bold px-4 py-3 border-b border-line">Broadcasts</h2>
+      {broadcasts.length === 0 ? <p class="p-6 text-sm text-ink-2">No broadcasts yet. Create one — “Weekend availability” to past customers is a great first send.</p> : (
+        <div class="overflow-x-auto">
+          <table class="table min-w-[640px]">
+            <thead><tr><th>Campaign</th><th>Status</th><th class="text-right">Sent</th><th class="text-right">Opens</th><th class="text-right">Clicks</th><th class="text-right">Bookings</th></tr></thead>
+            <tbody>
+              {broadcasts.map((c) => (
+                <tr>
+                  <td><a class="font-semibold hover:text-brand" href={`/app/marketing/${c.id}`}>{c.name}</a><p class="text-xs text-ink-2">{c.channel.toUpperCase()} · {segmentLabel(c.segment)}{c.id in recips ? ` · ${recips[c.id]} recipients` : ''}</p></td>
+                  <td><span class:list={['chip', STATUS[c.status]]}>{c.status}</span>{c.status === 'scheduled' && <p class="text-xs text-ink-2 mt-0.5">{fmtDateTime(c.scheduledAt, t.timezone)}</p>}</td>
+                  <td class="text-right tabular-nums">{c.sentCount}</td>
+                  <td class="text-right tabular-nums">{c.openCount}</td>
+                  <td class="text-right tabular-nums">{c.clickCount}</td>
+                  <td class="text-right tabular-nums">{c.bookingsAttributed}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+    </section>
+
+    {canEdit && (
+      <form method="post" class="card p-4 space-y-3 h-fit">
+        <h2 class="font-bold">New campaign</h2>
+        <input type="hidden" name="_action" value="create" />
+        <div><label class="label" for="name">Name</label><input class="input" id="name" name="name" required maxlength="100" placeholder="Weekend availability — May" /></div>
+        <fieldset><legend class="label">Channel</legend>
+          <div class="flex gap-4 text-sm">
+            <label class="flex items-center gap-2"><input type="radio" name="channel" value="email" checked class="accent-[var(--color-brand)]" />Email</label>
+            <label class="flex items-center gap-2"><input type="radio" name="channel" value="sms" class="accent-[var(--color-brand)]" />SMS</label>
+          </div>
+        </fieldset>
+        <div><label class="label" for="segment">Segment</label><select class="input" id="segment" name="segment">{SEGMENTS.map((s) => <option value={s.key}>{s.label}</option>)}</select></div>
+        <div><label class="label" for="notBookedDays">N days <span class="font-normal text-ink-2">(for “haven’t booked”)</span></label><input class="input" type="number" id="notBookedDays" name="notBookedDays" value="180" min="7" max="3650" /></div>
+        <p class="hint">Only customers who opted in to that channel receive it. Merge tags: {MERGE_TAGS.map((m) => <code class="mr-1">{`{{${m}}}`}</code>)}</p>
+        <button class="btn-primary w-full"><Icon name="plus" size={16} />Create & edit</button>
+      </form>
+    )}
+  </div>
+</AppLayout>

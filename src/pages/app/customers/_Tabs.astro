@@ -1,0 +1,12 @@
+---
+interface Props { active: 'customers' | 'leads'; leads?: number }
+const { active, leads } = Astro.props;
+const tabs = [{ k: 'customers', href: '/app/customers', label: 'Customers' }, { k: 'leads', href: '/app/customers/leads', label: 'Leads pipeline' }];
+---
+<nav aria-label="CRM" class="flex gap-1 border-b border-line mb-5 -mt-2">
+  {tabs.map((t) => (
+    <a href={t.href} aria-current={active === t.k ? 'page' : undefined} class:list={['px-4 py-2.5 text-sm font-semibold border-b-2 -mb-px', active === t.k ? 'border-brand text-brand' : 'border-transparent text-ink-2 hover:text-ink']}>
+      {t.label}{t.k === 'leads' && leads ? <span class="ml-1.5 chip bg-pop text-[#1B1F4A] px-1.5">{leads}</span> : null}
+    </a>
+  ))}
+</nav>

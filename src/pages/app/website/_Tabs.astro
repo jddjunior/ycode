@@ -1,0 +1,16 @@
+---
+/** Sub-navigation for the Website section (underscore = not a route). */
+interface Props { active: 'pages' | 'design' | 'posts' }
+const { active } = Astro.props;
+const tabs = [
+  { key: 'pages', href: '/app/website', label: 'Pages' },
+  { key: 'posts', href: '/app/website?kind=post', label: 'Blog posts' },
+  { key: 'design', href: '/app/website/design', label: 'Design, nav & SEO defaults' },
+];
+---
+<nav class="flex gap-1 overflow-x-auto mb-5 -mx-1 px-1" aria-label="Website sections">
+  {tabs.map((t) => (
+    <a href={t.href} aria-current={active === t.key ? 'page' : undefined}
+      class:list={['whitespace-nowrap rounded-full px-4 py-2 text-sm font-semibold border transition-colors', active === t.key ? 'bg-ink text-white border-ink' : 'bg-white border-line text-ink-2 hover:text-ink']}>{t.label}</a>
+  ))}
+</nav>

@@ -1,0 +1,221 @@
+---
+import { and, eq, sql } from 'drizzle-orm';
+import { z } from 'zod';
+import AppLayout from '../../../layouts/AppLayout.astro';
+import Icon from '../../../components/Icon.astro';
+import { getDb, schema } from '../../../db/client';
+import type { AdCreative } from '../../../db/schema';
+import { formData, str, int, cents, bool } from '../../../lib/forms';
+import { PLANS } from '../../../lib/plans';
+import { money } from '../../../lib/pricing';
+import { onManagedAdSpend } from '../../../lib/revenue';
+import { isValidDay } from '../../../lib/time';
+import { HEADLINE_MAX, DESCRIPTION_MAX, PRIMARY_MAX, validateCreative, matchType } from '../../../lib/growth/ads';
+import { ctx, done, pct } from '../../../lib/growth/app';
+
+const { t, tenantId, canEdit } = ctx(Astro);
+const id = Astro.params.id ?? '';
+if (!z.uuid().safeParse(id).success) return Astro.redirect('/app/ads');
+const db = await getDb();
+const [camp] = await db.select().from(schema.adCampaigns).where(and(eq(schema.adCampaigns.id, id), eq(schema.adCampaigns.tenantId, tenantId))).limit(1);
+if (!camp) return Astro.redirect('/app/ads');
+const where = and(eq(schema.adCampaigns.id, id), eq(schema.adCampaigns.tenantId, tenantId));
+const plan = PLANS[t.plan];
+const STATUSES = ['draft', 'pending_launch', 'live', 'paused', 'ended'] as const;
+const kwOk = (k: string) => k.length <= 80 && /^(\[[^\]"[]+\]|"[^"]+"|[^"[\]]+)$/.test(k);
+
+const f = await formData(Astro);
+if (f) {
+  if (!canEdit) return done(Astro, 'Only owners and managers can edit campaigns.', undefined, 'error');
+  const action = str(f, '_action', 20);
+  if (action === 'creative') {
+    const groups: AdCreative['adGroups'] = camp.creative.adGroups.map((g, gi) => ({
+      name: str(f, `g${gi}_name`, 80) || g.name,
+      headlines: f.getAll(`g${gi}_h`).map((x) => String(x).replace(/\s+/g, ' ').trim()).filter(Boolean).slice(0, 15),
+      descriptions: f.getAll(`g${gi}_d`).map((x) => String(x).replace(/\s+/g, ' ').trim()).filter(Boolean).slice(0, 4),
+      keywords: [...new Set(str(f, `g${gi}_kw`, 8000).split(/\r?\n/).map((k) => k.trim().toLowerCase()).filter(Boolean))].slice(0, 50),
+      negativeKeywords: [...new Set(str(f, `g${gi}_neg`, 4000).split(/\r?\n|,/).map((k) => k.trim().toLowerCase()).filter(Boolean))].slice(0, 50),
+      finalUrl: str(f, `g${gi}_url`, 500) || g.finalUrl,
+    }));
+    const bad = groups.flatMap((g) => [...g.keywords, ...(g.negativeKeywords ?? [])]).find((k) => !kwOk(k));
+    if (bad) return done(Astro, `Keyword “${bad.slice(0, 40)}” isn’t valid. Use plain text, "phrase" or [exact].`, undefined, 'error');
+    if (groups.some((g) => !/^https:\/\/|^http:\/\/localhost/.test(g.finalUrl))) return done(Astro, 'Final URLs must start with https://', undefined, 'error');
+    const primaryText = camp.network === 'meta' ? f.getAll('primary').map((x) => String(x).replace(/\s+/g, ' ').trim()).filter(Boolean).slice(0, 5) : undefined;
+    const creative: AdCreative = { adGroups: groups, ...(primaryText ? { primaryText } : {}) };
+    const issues = validateCreative(creative, camp.network);
+    if (issues.length) return done(Astro, `${issues[0].group >= 0 ? `Ad group ${issues[0].group + 1} · ` : ''}${issues[0].field}: ${issues[0].message}`, undefined, 'error');
+    await db.update(schema.adCampaigns).set({ creative }).where(where);
+    return done(Astro, 'Ad copy saved — all headlines and descriptions fit.');
+  }
+  if (action === 'settings') {
+    const name = str(f, 'name', 100);
+    const budget = cents(f, 'budget');
+    const status = STATUSES.find((s) => s === str(f, 'status', 20));
+    if (name.length < 3 || !status) return done(Astro, 'Check the name and status.', undefined, 'error');
+    if (budget < 500 || budget > 100_000) return done(Astro, 'Daily budget must be between $5 and $1,000.', undefined, 'error');
+    if (status === 'live' || status === 'pending_launch') {
+      const issues = validateCreative(camp.creative, camp.network);
+      if (issues.length) return done(Astro, `Fix the ad copy before launching: ${issues[0].field} — ${issues[0].message}`, undefined, 'error');
+    }
+    const managed = bool(f, 'managed');
+    // Self-serve campaigns can't jump straight to "live" here: the operator launches by importing the CSV.
+    await db.update(schema.adCampaigns).set({ name, dailyBudgetCents: budget, managed, status: managed && status === 'live' && !camp.managed ? 'pending_launch' : status }).where(where);
+    return done(Astro, managed && !camp.managed ? 'Sent to the Branch Avenue ads team — we’ll launch within one business day.' : 'Campaign settings saved.');
+  }
+  if (action === 'spend') {
+    const period = str(f, 'period', 10);
+    const spendCents = cents(f, 'spend');
+    const clicks = int(f, 'clicks'), impressions = int(f, 'impressions'), conversions = int(f, 'conversions');
+    if (!isValidDay(period)) return done(Astro, 'Pick the date the spend period ended.', '#spend', 'error');
+    if (spendCents <= 0 || spendCents > 10_000_000) return done(Astro, 'Enter the spend for that period.', '#spend', 'error');
+    if ([clicks, impressions, conversions].some((n) => n < 0 || n > 10_000_000) || clicks > impressions && impressions > 0) return done(Astro, 'Check the click, impression and conversion numbers.', '#spend', 'error');
+    if (camp.managed) {
+      const [dupe] = await db.select({ id: schema.revenueEvents.id }).from(schema.revenueEvents).where(and(eq(schema.revenueEvents.kind, 'ads_management_fee'), eq(schema.revenueEvents.sourceRef, `ads:${camp.id}:${period}`))).limit(1);
+      if (dupe) return done(Astro, `Spend for the period ending ${period} was already recorded.`, undefined, 'error');
+    }
+    await db.update(schema.adCampaigns).set({
+      spendCents: sql`${schema.adCampaigns.spendCents} + ${spendCents}`, clicks: sql`${schema.adCampaigns.clicks} + ${clicks}`,
+      impressions: sql`${schema.adCampaigns.impressions} + ${impressions}`, conversions: sql`${schema.adCampaigns.conversions} + ${conversions}`,
+    }).where(where);
+    const fee = camp.managed ? await onManagedAdSpend({ tenantId, campaignId: camp.id, periodKey: period, spendCents }) : null;
+    return done(Astro, `Recorded ${money(spendCents)} of spend${fee ? ` · management fee ${money(fee.amountCents)}` : ''}.`);
+  }
+  return done(Astro, 'Unknown action.', undefined, 'error');
+}
+
+const [att] = await db.select({ n: sql<number>`count(*)::int`, rev: sql<number>`coalesce(sum(${schema.bookings.subtotalCents}),0)::int` }).from(schema.bookings)
+  .where(and(eq(schema.bookings.tenantId, tenantId), sql`${schema.bookings.status} not in ('hold','canceled')`, sql`${schema.bookings.attribution}->>'utmCampaign' = ${camp.id}`));
+const fees = await db.select().from(schema.revenueEvents).where(and(eq(schema.revenueEvents.tenantId, tenantId), eq(schema.revenueEvents.kind, 'ads_management_fee'), sql`${schema.revenueEvents.sourceRef} like ${'ads:' + camp.id + ':%'}`));
+const feeTotal = fees.reduce((s, e) => s + e.amountCents, 0);
+const bookings = Math.max(camp.conversions, att.n);
+const issues = validateCreative(camp.creative, camp.network);
+const today = new Date().toISOString().slice(0, 10);
+const kwBadge = (k: string) => matchType(k).type;
+---
+<AppLayout title={camp.name} section="ads" subtitle={`${camp.network === 'google' ? 'Google Search' : 'Meta'} · ${camp.cities.join(', ')} · ${camp.status.replace('_', ' ')}`} wide>
+  <a slot="actions" href="/app/ads" class="btn-ghost">← Ads</a>
+  {camp.network === 'google' && <a slot="actions" href={`/api/app/ads/${camp.id}.csv`} class="btn-primary"><Icon name="arrow" size={16} />Google Ads Editor CSV</a>}
+
+  <div class="grid gap-3 grid-cols-2 lg:grid-cols-6 mb-6">
+    <div class="kpi"><p class="kpi-label">Spend</p><p class="kpi-value">{money(camp.spendCents)}</p></div>
+    <div class="kpi"><p class="kpi-label">Impressions</p><p class="kpi-value">{camp.impressions.toLocaleString()}</p></div>
+    <div class="kpi"><p class="kpi-label">Clicks</p><p class="kpi-value">{camp.clicks.toLocaleString()}</p><p class="hint">CPC {camp.clicks ? money(Math.round(camp.spendCents / camp.clicks)) : '—'}</p></div>
+    <div class="kpi"><p class="kpi-label">Bookings</p><p class="kpi-value">{bookings}</p><p class="hint">{camp.conversions} reported · {att.n} tracked</p></div>
+    <div class="kpi bg-ink text-white border-ink"><p class="kpi-label text-white/60">Cost per booking</p><p class="kpi-value text-sun">{bookings ? money(Math.round(camp.spendCents / bookings)) : '—'}</p></div>
+    <div class="kpi"><p class="kpi-label">Booked revenue</p><p class="kpi-value">{money(att.rev)}</p><p class="hint">ROAS {camp.spendCents && att.rev ? (att.rev / camp.spendCents).toFixed(1) + '×' : '—'}</p></div>
+  </div>
+
+  <div class="grid gap-6 xl:grid-cols-[1fr_360px]">
+    <form method="post" class="space-y-4 min-w-0" id="creative">
+      <input type="hidden" name="_action" value="creative" />
+      {issues.length > 0 && <div role="alert" class="rounded-xl bg-red-50 border border-red-200 text-red-800 text-sm px-4 py-3">{issues.length} issue{issues.length === 1 ? '' : 's'} to fix before launch — first: {issues[0].field}: {issues[0].message}</div>}
+      {camp.network === 'meta' && (
+        <section class="card p-4 space-y-3">
+          <h2 class="font-bold">Primary text</h2>
+          {(camp.creative.primaryText ?? ['']).map((p, i) => (
+            <div><label class="label text-xs" for={`pt${i}`}>Variation {i + 1} <span class="font-normal text-ink-2" data-counter-for={`pt${i}`} data-max={PRIMARY_MAX}>{p.length}/{PRIMARY_MAX}</span></label><textarea class="input" id={`pt${i}`} name="primary" rows="3" maxlength={PRIMARY_MAX} data-max={PRIMARY_MAX}>{p}</textarea></div>
+          ))}
+        </section>
+      )}
+      {camp.creative.adGroups.map((g, gi) => (
+        <details class="card overflow-hidden group" open={gi === 0}>
+          <summary class="flex items-center gap-3 px-4 py-3 cursor-pointer list-none">
+            <span class="grid place-items-center size-8 rounded-lg bg-brand-soft text-brand text-xs font-bold shrink-0">{gi + 1}</span>
+            <span class="min-w-0 flex-1"><span class="block font-semibold truncate">{g.name}</span><span class="block text-xs text-ink-2">{g.headlines.length} headlines · {g.descriptions.length} descriptions · {g.keywords.length} keywords</span></span>
+            <Icon name="arrow" size={16} class="text-ink-2 transition-transform group-open:rotate-90" />
+          </summary>
+          <div class="border-t border-line p-4 grid gap-5 lg:grid-cols-2">
+            <div class="space-y-2">
+              <div><label class="label text-xs" for={`g${gi}_name`}>Ad group name</label><input class="input" id={`g${gi}_name`} name={`g${gi}_name`} value={g.name} maxlength="80" /></div>
+              <p class="label text-xs mb-0">Headlines <span class="font-normal text-ink-2">(max {HEADLINE_MAX} characters, 3–15)</span></p>
+              {Array.from({ length: 15 }, (_, i) => g.headlines[i] ?? '').map((h, i) => (
+                <div class="relative">
+                  <label class="sr-only" for={`g${gi}_h${i}`}>Headline {i + 1}</label>
+                  <input class="input pr-14 text-sm" id={`g${gi}_h${i}`} name={`g${gi}_h`} value={h} maxlength={HEADLINE_MAX + 10} data-max={HEADLINE_MAX} placeholder={`Headline ${i + 1}`} />
+                  <span class:list={['absolute right-3 top-1/2 -translate-y-1/2 text-xs tabular-nums', h.length > HEADLINE_MAX ? 'text-danger font-bold' : 'text-ink-2']} data-counter-for={`g${gi}_h${i}`}>{h.length}/{HEADLINE_MAX}</span>
+                </div>
+              ))}
+            </div>
+            <div class="space-y-4">
+              <div class="space-y-2">
+                <p class="label text-xs mb-0">Descriptions <span class="font-normal text-ink-2">(max {DESCRIPTION_MAX} characters, 2–4)</span></p>
+                {Array.from({ length: 4 }, (_, i) => g.descriptions[i] ?? '').map((d, i) => (
+                  <div>
+                    <label class="sr-only" for={`g${gi}_d${i}`}>Description {i + 1}</label>
+                    <textarea class="input text-sm" id={`g${gi}_d${i}`} name={`g${gi}_d`} rows="2" maxlength={DESCRIPTION_MAX + 20} data-max={DESCRIPTION_MAX} placeholder={`Description ${i + 1}`}>{d}</textarea>
+                    <p class:list={['text-right text-xs tabular-nums', d.length > DESCRIPTION_MAX ? 'text-danger font-bold' : 'text-ink-2']} data-counter-for={`g${gi}_d${i}`}>{d.length}/{DESCRIPTION_MAX}</p>
+                  </div>
+                ))}
+              </div>
+              {camp.network === 'google' && <>
+                <div>
+                  <label class="label text-xs" for={`g${gi}_kw`}>Keywords <span class="font-normal text-ink-2">— [exact], "phrase" or broad, one per line</span></label>
+                  <textarea class="input font-mono text-xs" id={`g${gi}_kw`} name={`g${gi}_kw`} rows="6">{g.keywords.join('\n')}</textarea>
+                  <p class="hint">{(['Exact', 'Phrase', 'Broad'] as const).map((m) => `${g.keywords.filter((k) => kwBadge(k) === m).length} ${m.toLowerCase()}`).join(' · ')}</p>
+                </div>
+                <div><label class="label text-xs" for={`g${gi}_neg`}>Negative keywords</label><textarea class="input font-mono text-xs" id={`g${gi}_neg`} name={`g${gi}_neg`} rows="3">{(g.negativeKeywords ?? []).join('\n')}</textarea></div>
+              </>}
+              <div><label class="label text-xs" for={`g${gi}_url`}>Final URL</label><input class="input text-xs font-mono" id={`g${gi}_url`} name={`g${gi}_url`} value={g.finalUrl} maxlength="500" /><p class="hint">UTM tags let BounceOS tie each booking back to this campaign.</p></div>
+              <div class="rounded-xl border border-line p-3 bg-white">
+                <p class="text-[11px] font-bold text-ink">Sponsored</p>
+                <p class="text-[#1a0dab] text-base leading-snug">{g.headlines.slice(0, 3).join(' | ')}</p>
+                <p class="text-xs text-ink-2 mt-1">{g.descriptions[0]}</p>
+              </div>
+            </div>
+          </div>
+        </details>
+      ))}
+      {canEdit && <div class="sticky bottom-3 flex justify-end"><button class="btn-primary shadow-lg">Save ad copy</button></div>}
+    </form>
+
+    <aside class="space-y-4">
+      <form method="post" class="card p-4 space-y-3">
+        <h2 class="font-bold">Settings</h2>
+        <input type="hidden" name="_action" value="settings" />
+        <div><label class="label" for="name">Name</label><input class="input" id="name" name="name" value={camp.name} maxlength="100" required /></div>
+        <div class="grid grid-cols-2 gap-2">
+          <div><label class="label" for="budget">Daily budget</label><input class="input" id="budget" name="budget" inputmode="decimal" value={(camp.dailyBudgetCents / 100).toFixed(2)} /></div>
+          <div><label class="label" for="status">Status</label><select class="input" id="status" name="status">{STATUSES.map((s) => <option value={s} selected={camp.status === s}>{s.replace('_', ' ')}</option>)}</select></div>
+        </div>
+        <label class="flex gap-3 rounded-xl border border-line p-3 cursor-pointer has-[:checked]:border-brand has-[:checked]:bg-brand-soft/40">
+          <input type="checkbox" name="managed" checked={camp.managed} class="mt-1 size-4 accent-[var(--color-brand)] shrink-0" />
+          <span class="text-sm"><span class="font-semibold block">Managed by Branch Avenue</span><span class="text-xs text-ink-2">{pct(plan.adsManagementBps)} of spend on {plan.name}. Weekly optimization + reporting.</span></span>
+        </label>
+        {canEdit && <button class="btn-primary w-full">Save settings</button>}
+      </form>
+
+      <div class="card p-4 text-sm space-y-1">
+        <h2 class="font-bold">Revenue share</h2>
+        <div class="flex justify-between"><span class="text-ink-2">Management fee rate</span><span class="font-semibold">{camp.managed ? pct(plan.adsManagementBps) : 'Self-serve (0%)'}</span></div>
+        <div class="flex justify-between"><span class="text-ink-2">Fees to date</span><span class="font-semibold tabular-nums">{money(feeTotal)}</span></div>
+        <div class="flex justify-between"><span class="text-ink-2">Est. monthly fee</span><span class="font-semibold tabular-nums">{camp.managed ? money(Math.round((camp.dailyBudgetCents * 30.4 * plan.adsManagementBps) / 10_000)) : '—'}</span></div>
+        <p class="hint">Ad spend is paid directly to Google/Meta. Branch Avenue only earns the fee above — no markup on clicks.</p>
+      </div>
+
+      <form method="post" id="spend" class="card p-4 space-y-3 scroll-mt-24">
+        <h2 class="font-bold">Record spend</h2>
+        <p class="text-xs text-ink-2">{camp.managed ? 'Enter the period’s numbers from Google/Meta. The management fee accrues automatically.' : 'Paste in this period’s numbers to track cost per booking.'}</p>
+        <input type="hidden" name="_action" value="spend" />
+        <div class="grid grid-cols-2 gap-2">
+          <div><label class="label text-xs" for="period">Period ending</label><input class="input" type="date" id="period" name="period" value={today} required /></div>
+          <div><label class="label text-xs" for="spend-amt">Spend ($)</label><input class="input" id="spend-amt" name="spend" inputmode="decimal" required placeholder="250.00" /></div>
+          <div><label class="label text-xs" for="impressions">Impressions</label><input class="input" type="number" min="0" id="impressions" name="impressions" value="0" /></div>
+          <div><label class="label text-xs" for="clicks">Clicks</label><input class="input" type="number" min="0" id="clicks" name="clicks" value="0" /></div>
+          <div class="col-span-2"><label class="label text-xs" for="conversions">Conversions (bookings)</label><input class="input" type="number" min="0" id="conversions" name="conversions" value="0" /></div>
+        </div>
+        {canEdit && <button class="btn-ghost w-full">Record spend</button>}
+        {fees.length > 0 && <ul class="text-xs text-ink-2 border-t border-line pt-2 space-y-0.5">{fees.slice(-6).map((e) => <li class="flex justify-between"><span>{e.sourceRef?.split(':').pop()}</span><span class="tabular-nums">fee {money(e.amountCents)} · {e.status}</span></li>)}</ul>}
+      </form>
+    </aside>
+  </div>
+
+  <script>
+    document.querySelectorAll<HTMLInputElement | HTMLTextAreaElement>('[data-max]').forEach((el) => {
+      const max = Number(el.dataset.max);
+      const out = document.querySelector<HTMLElement>(`[data-counter-for="${el.id}"]`);
+      if (!out || !el.id) return;
+      const upd = () => { out.textContent = `${el.value.length}/${max}`; out.classList.toggle('text-danger', el.value.length > max); out.classList.toggle('font-bold', el.value.length > max); el.setAttribute('aria-invalid', String(el.value.length > max)); };
+      el.addEventListener('input', upd);
+    });
+  </script>
+</AppLayout>

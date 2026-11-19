@@ -1,0 +1,78 @@
+---
+/** CRM: customers with search, type and tag filters, LTV and booking counts. */
+import { and, desc, eq, ilike, or, sql, type SQL } from 'drizzle-orm';
+import AppLayout from '../../../layouts/AppLayout.astro';
+import Icon from '../../../components/Icon.astro';
+import Tabs from './_Tabs.astro';
+import { getDb, schema } from '../../../db/client';
+import { money } from '../../../lib/pricing';
+import { opsCtx, CUSTOMER_TYPES, dateOnly } from '../../../lib/ops/ctx';
+import { openLeads } from '../../../lib/ops/stats';
+
+const { t, tz } = opsCtx(Astro);
+const db = await getDb();
+const q = Astro.url.searchParams;
+const search = (q.get('q') ?? '').trim().slice(0, 80);
+const type = CUSTOMER_TYPES.find((x) => x === q.get('type')) ?? '';
+const tag = (q.get('tag') ?? '').trim().slice(0, 40);
+const sort = q.get('sort') === 'recent' ? 'recent' : q.get('sort') === 'name' ? 'name' : 'ltv';
+const C = schema.customers, B = schema.bookings;
+const conds: SQL[] = [eq(C.tenantId, t.id)];
+if (search) { const like = `%${search.replace(/[%_\\]/g, '\\$&')}%`; conds.push(or(ilike(C.name, like), ilike(C.email, like), ilike(C.phone, like), ilike(C.organization, like))!); }
+if (type) conds.push(eq(C.type, type));
+if (tag) conds.push(sql`${C.tags} ? ${tag}`);
+const stats = db.select({ cid: B.customerId, n: sql<number>`count(*)::int`.as('n'), last: sql<Date>`max(${B.startsAt})`.as('last') }).from(B)
+  .where(and(eq(B.tenantId, t.id), sql`${B.status} in ('pending','confirmed','completed')`)).groupBy(B.customerId).as('st');
+const rows = await db.select({ c: C, n: stats.n, last: stats.last }).from(C).leftJoin(stats, eq(stats.cid, C.id)).where(and(...conds))
+  .orderBy(sort === 'recent' ? desc(C.createdAt) : sort === 'name' ? C.name : desc(C.lifetimeValueCents)).limit(300);
+const [agg] = await db.select({ n: sql<number>`count(*)::int`, ltv: sql<number>`coalesce(sum(${C.lifetimeValueCents}),0)::int`, tags: sql<string[]>`coalesce((select array_agg(distinct x) from ${C} c2, jsonb_array_elements_text(c2.tags) x where c2.tenant_id = ${t.id}), '{}')` }).from(C).where(eq(C.tenantId, t.id));
+const leadsOpen = await openLeads(t.id);
+const allTags = (agg?.tags ?? []).slice(0, 30);
+const qs = (o: Record<string, string>) => { const u = new URLSearchParams(); for (const [k, v] of Object.entries({ q: search, type, tag, sort, ...o })) if (v) u.set(k, v); return '?' + u.toString(); };
+const initials = (n: string) => n.split(/\s+/).map((p) => p[0]).join('').slice(0, 2).toUpperCase() || '?';
+---
+<AppLayout title="Customers & Leads" section="customers" subtitle={`${agg?.n ?? 0} customers · ${money(agg?.ltv ?? 0)} lifetime value`} wide>
+  <Fragment slot="actions"><a href="/app/bookings/new" class="btn-ghost"><Icon name="plus" size={16} />Booking for new customer</a></Fragment>
+  <Tabs active="customers" leads={leadsOpen} />
+  <form method="get" class="card p-3 grid gap-3 sm:grid-cols-[1fr_180px_160px_auto] items-end">
+    <div><label class="label" for="q">Search</label><input id="q" name="q" type="search" class="input" placeholder="Name, email, phone or organization" value={search} /></div>
+    <div><label class="label" for="type">Type</label><select id="type" name="type" class="input"><option value="">All types</option>{CUSTOMER_TYPES.map((x) => <option value={x} selected={x === type} class="capitalize">{x[0].toUpperCase() + x.slice(1)}</option>)}</select></div>
+    <div><label class="label" for="sort">Sort</label><select id="sort" name="sort" class="input"><option value="ltv" selected={sort === 'ltv'}>Lifetime value</option><option value="recent" selected={sort === 'recent'}>Newest</option><option value="name" selected={sort === 'name'}>Name</option></select></div>
+    {tag && <input type="hidden" name="tag" value={tag} />}
+    <button class="btn-primary"><Icon name="search" size={16} />Filter</button>
+  </form>
+  {allTags.length > 0 && (
+    <div class="flex flex-wrap gap-1.5 mt-3" aria-label="Filter by tag">
+      {allTags.map((x) => <a href={qs({ tag: x === tag ? '' : x })} class:list={['chip border', x === tag ? 'bg-brand text-white border-brand' : 'bg-white border-line text-ink-2 hover:text-ink']}>#{x}</a>)}
+    </div>
+  )}
+  {rows.length === 0 ? (
+    <div class="card p-10 text-center mt-4">
+      <span class="mx-auto grid place-items-center size-12 rounded-2xl bg-brand-soft text-brand"><Icon name="users" /></span>
+      <h2 class="font-bold text-lg mt-3">{search || type || tag ? 'No customers match' : 'No customers yet'}</h2>
+      <p class="text-sm text-ink-2 mt-1">Customers are created automatically from website bookings and phone orders.</p>
+    </div>
+  ) : (
+    <div class="card overflow-hidden mt-4">
+      <table class="table">
+        <thead><tr><th scope="col">Customer</th><th scope="col" class="hidden md:table-cell">Type & tags</th><th scope="col" class="text-right hidden sm:table-cell">Bookings</th><th scope="col" class="hidden lg:table-cell">Last event</th><th scope="col" class="text-right">LTV</th></tr></thead>
+        <tbody>
+          {rows.map(({ c, n, last }) => (
+            <tr class="hover:bg-canvas/60">
+              <td>
+                <a href={`/app/customers/${c.id}`} class="flex items-center gap-3 min-w-0">
+                  <span class="grid place-items-center size-9 rounded-full bg-brand-soft text-brand text-xs font-bold shrink-0" aria-hidden="true">{initials(c.name || c.email)}</span>
+                  <span class="min-w-0"><span class="block font-semibold truncate hover:text-brand">{c.name || c.email}</span><span class="block text-xs text-ink-2 truncate">{c.organization ? `${c.organization} · ` : ''}{c.email}</span></span>
+                </a>
+              </td>
+              <td class="hidden md:table-cell"><span class="chip bg-canvas border border-line text-ink-2 capitalize">{c.type}</span> {c.tags.slice(0, 3).map((x) => <span class="chip bg-brand-soft text-brand ml-1">#{x}</span>)}</td>
+              <td class="text-right tabular-nums hidden sm:table-cell">{n ?? 0}</td>
+              <td class="hidden lg:table-cell text-ink-2">{last ? dateOnly(new Date(last), tz) : '—'}</td>
+              <td class="text-right tabular-nums font-semibold">{money(c.lifetimeValueCents)}</td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
+  )}
+</AppLayout>

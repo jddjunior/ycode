@@ -1,4 +1,333 @@
 ---
+/**
+ * Game Plan: the operator's daily command center.
+ * Today/tomorrow drop-offs & pickups, weather risk, KPIs, goal, streak,
+ * achievements, activity and (with ?welcome=1) the onboarding checklist.
+ */
+import { and, eq, sql } from 'drizzle-orm';
 import AppLayout from '../../layouts/AppLayout.astro';
+import Icon from '../../components/Icon.astro';
+import WeatherBadge from '../../components/ops/WeatherBadge.astro';
+import { getDb, schema } from '../../db/client';
+import { money } from '../../lib/pricing';
+import { formData, cents, flash } from '../../lib/forms';
+import { invalidateTenantCache } from '../../lib/tenant';
+import { opsCtx, monthBounds, dayTitle, shortDay, time, delta, addDays, dayBounds, localDay, type OpsSettings } from '../../lib/ops/ctx';
+import { stopsForDay, weatherFor, FULFIL_STATUSES } from '../../lib/ops/stops';
+import { bookedTotals, unpaidBalances, openLeads, utilization, partyStreak, recentActivity } from '../../lib/ops/stats';
+import { ACHIEVEMENTS, syncAchievements } from '../../lib/ops/achievements';
+
+const { t, s, tz, today, settings, canManage } = opsCtx(Astro);
+const db = await getDb();
+
+const f = await formData(Astro);
+if (f && f.get('_action') === 'goal' && canManage) {
+  const goal = Math.min(100_000_000, Math.max(0, cents(f, 'goal')));
+  await db.update(schema.tenants).set({ settings: { ...settings, monthlyGoalCents: goal } as OpsSettings, updatedAt: new Date() }).where(eq(schema.tenants.id, t.id));
+  invalidateTenantCache();
+  flash(Astro.cookies, `Monthly goal set to ${money(goal)}. Let’s go get it!`);
+  return Astro.redirect('/app', 303);
+}
+
+const tomorrow = addDays(today, 1);
+const thisMonth = monthBounds(today, tz, 0);
+const lastMonth = monthBounds(today, tz, -1);
+const daysInMonth = Math.round((Date.parse(thisMonth.nextFirstDay) - Date.parse(thisMonth.firstDay)) / 86_400_000);
+const week = { from: dayBounds(today, tz).from, to: dayBounds(addDays(today, 7), tz).from };
+
+const [cur, prev, next7, unpaid, leadsOpen, util, streak, activity, ach, todayStops, tomorrowStops] = await Promise.all([
+  bookedTotals(t.id, thisMonth.from, thisMonth.to),
+  bookedTotals(t.id, lastMonth.from, lastMonth.to),
+  bookedTotals(t.id, week.from, week.to),
+  unpaidBalances(t.id),
+  openLeads(t.id),
+  utilization(t, thisMonth.firstDay, daysInMonth),
+  partyStreak(t),
+  recentActivity(t.id, 10),
+  syncAchievements(t),
+  stopsForDay(t, today),
+  stopsForDay(t, tomorrow),
+]);
+
+// Event days in the next 7 days → weather risk per day.
+const upcoming = await db.select({ id: schema.bookings.id, number: schema.bookings.number, startsAt: schema.bookings.startsAt, city: schema.bookings.city, total: schema.bookings.totalCents, name: schema.customers.name })
+  .from(schema.bookings).leftJoin(schema.customers, eq(schema.customers.id, schema.bookings.customerId))
+  .where(and(eq(schema.bookings.tenantId, t.id), sql`${schema.bookings.status} in ('pending','confirmed')`, sql`${schema.bookings.startsAt} >= ${week.from}`, sql`${schema.bookings.startsAt} < ${week.to}`))
+  .orderBy(schema.bookings.startsAt);
+const eventDays = [...new Set([today, tomorrow, ...upcoming.map((u) => localDay(u.startsAt, tz))])];
+const wx = await weatherFor(t, eventDays);
+const stopDays = eventDays.filter((d) => wx[d]?.level === 'stop');
+
+// Onboarding checklist
+const one = async (q: Promise<{ n: number }[]>) => (await q)[0]?.n ?? 0;
+const [nItems, nZones, sitePub, nDomains] = await Promise.all([
+  one(db.select({ n: sql<number>`count(*)::int` }).from(schema.items).where(eq(schema.items.tenantId, t.id))),
+  one(db.select({ n: sql<number>`count(*)::int` }).from(schema.deliveryZones).where(and(eq(schema.deliveryZones.tenantId, t.id), sql`(jsonb_array_length(${schema.deliveryZones.zips}) > 0 or ${schema.deliveryZones.radiusMiles} is not null)`))),
+  one(db.select({ n: sql<number>`count(*)::int` }).from(schema.sites).where(and(eq(schema.sites.tenantId, t.id), eq(schema.sites.published, true)))),
+  one(db.select({ n: sql<number>`count(*)::int` }).from(schema.domains).where(and(eq(schema.domains.tenantId, t.id), eq(schema.domains.verified, true)))),
+]);
+const steps = [
+  { done: nItems > 0, title: 'Add your inventory', text: 'Bounce houses, slides, add-ons and packages with photos and specs.', href: '/app/inventory/new', cta: 'Add an item' },
+  { done: !!t.stripeChargesEnabled, title: 'Connect payments', text: 'Take deposits online with Stripe — payouts go straight to your bank.', href: '/app/settings/payments', cta: 'Connect Stripe' },
+  { done: nZones > 0, title: 'Set delivery zones', text: 'ZIP codes or a radius, each with its own fee and minimum.', href: '/app/settings/zones', cta: 'Set zones' },
+  { done: sitePub > 0, title: 'Publish your website', text: 'Your SEO storefront with live availability and online booking.', href: '/app/website', cta: 'Open website' },
+  { done: nDomains > 0, title: 'Connect your domain', text: 'Use your own .com — we handle SSL and redirects.', href: '/app/settings/domains', cta: 'Add domain' },
+];
+const stepsDone = steps.filter((x) => x.done).length;
+const showWelcome = Astro.url.searchParams.get('welcome') === '1';
+
+const goal = settings.monthlyGoalCents ?? Math.max(500_000, Math.ceil((prev.revenue * 1.1) / 50_000) * 50_000);
+const goalPct = goal ? Math.min(100, Math.round((cur.revenue / goal) * 100)) : 0;
+const dayOfMonth = Number(today.slice(8, 10));
+const pacePct = Math.round((dayOfMonth / daysInMonth) * 100);
+const dBookings = delta(cur.n, prev.n), dRevenue = delta(cur.revenue, prev.revenue);
+
+const hour = Number(new Intl.DateTimeFormat('en-US', { hour: 'numeric', hourCycle: 'h23', timeZone: tz }).format(new Date()));
+const greet = hour < 12 ? 'Good morning' : hour < 17 ? 'Good afternoon' : 'Good evening';
+const firstName = (s.user.name || '').split(' ')[0] || 'there';
+const todayDrop = todayStops.filter((x) => x.kind === 'dropoff').length, todayPick = todayStops.filter((x) => x.kind === 'pickup').length;
+const unlockedCount = ACHIEVEMENTS.filter((a) => ach.unlocked.has(a.key)).length;
+const nextBadge = ACHIEVEMENTS.find((a) => !ach.unlocked.has(a.key));
+
+const kpis = [
+  { label: 'Bookings this month', value: String(cur.n), sub: `vs ${prev.n} last month`, d: dBookings, href: '/app/bookings' },
+  { label: 'Booked revenue', value: money(cur.revenue), sub: `vs ${money(prev.revenue)} last month`, d: dRevenue, href: '/app/reports' },
+  { label: 'Next 7 days', value: `${next7.n} event${next7.n === 1 ? '' : 's'}`, sub: money(next7.revenue) + ' booked', href: '/app/bookings?view=calendar' },
+  { label: 'Utilization', value: `${util.pct}%`, sub: `${util.used} of ${util.capacity} unit-days`, href: '/app/reports#utilization' },
+  { label: 'Open leads', value: String(leadsOpen), sub: leadsOpen ? 'Follow up today' : 'Inbox zero', href: '/app/customers/leads' },
+  { label: 'Unpaid balances', value: money(unpaid.cents), sub: `${unpaid.n} booking${unpaid.n === 1 ? '' : 's'}`, href: '/app/bookings?status=unpaid' },
+];
+const actIcon: Record<string, string> = { booking: 'calendar', payment: 'dollar', achievement: 'trophy', welcome: 'sparkle', lead: 'users', delivery: 'truck', maintenance: 'wrench', review: 'star' };
+const ago = (d: Date) => {
+  const m = Math.round((Date.now() - d.getTime()) / 60_000);
+  if (m < 1) return 'just now'; if (m < 60) return `${m}m ago`;
+  const h = Math.round(m / 60); if (h < 24) return `${h}h ago`;
+  return `${Math.round(h / 24)}d ago`;
+};
+const days = [{ day: today, stops: todayStops }, { day: tomorrow, stops: tomorrowStops }];
 ---
-<AppLayout title="Game Plan" section="home"><p>placeholder</p></AppLayout>
+<AppLayout title="Game Plan" section="home" subtitle={`${greet}, ${firstName}. ${dayTitle(today, today)} is ${shortDay(today)}.`} wide>
+  <Fragment slot="actions">
+    <a href="/app/deliveries" class="btn-ghost"><Icon name="truck" size={16} />Route today</a>
+    <a href="/app/bookings?view=calendar" class="btn-ghost"><Icon name="calendar" size={16} />Calendar</a>
+  </Fragment>
+
+  {showWelcome && (
+    <section class="card p-5 lg:p-6 mb-6 border-brand/30 bg-gradient-to-br from-brand-soft to-white" aria-labelledby="welcome-h">
+      <div class="flex flex-wrap items-center gap-3">
+        <span class="grid place-items-center size-11 rounded-xl bg-brand text-white"><Icon name="sparkle" /></span>
+        <div class="min-w-0 flex-1">
+          <h2 id="welcome-h" class="text-xl font-extrabold">Welcome to BounceOS! Let’s get you booking.</h2>
+          <p class="text-sm text-ink-2">Five quick steps — most operators finish in under 20 minutes.</p>
+        </div>
+        <p class="text-sm font-semibold tabular-nums">{stepsDone}/5 done</p>
+      </div>
+      <div class="mt-4 h-2 rounded-full bg-white border border-line overflow-hidden" role="progressbar" aria-label="Setup progress" aria-valuemin="0" aria-valuemax="5" aria-valuenow={stepsDone}>
+        <div class="h-full bg-brand rounded-full" style={`width:${stepsDone * 20}%`}></div>
+      </div>
+      <ol class="mt-5 grid gap-3 md:grid-cols-5">
+        {steps.map((x, i) => (
+          <li class:list={['rounded-xl border p-4 flex flex-col', x.done ? 'bg-green-50 border-green-200' : 'bg-white border-line']}>
+            <div class="flex items-center gap-2">
+              <span class:list={['grid place-items-center size-6 rounded-full text-xs font-bold', x.done ? 'bg-mint text-white' : 'bg-canvas text-ink-2 border border-line']}>
+                {x.done ? <Icon name="check" size={14} /> : i + 1}
+              </span>
+              <h3 class="font-bold text-sm">{x.title}</h3>
+            </div>
+            <p class="text-xs text-ink-2 mt-2 flex-1">{x.text}</p>
+            {x.done ? <p class="text-xs font-semibold text-green-700 mt-3">Done</p> : <a href={x.href} class="text-sm font-semibold text-brand mt-3 inline-flex items-center gap-1">{x.cta}<Icon name="arrow" size={14} /></a>}
+          </li>
+        ))}
+      </ol>
+    </section>
+  )}
+
+  {!showWelcome && stepsDone < 5 && (
+    <a href="/app?welcome=1" class="card px-4 py-3 mb-6 flex items-center gap-3 hover:border-brand/40">
+      <Icon name="sparkle" class="text-brand" />
+      <span class="text-sm"><strong>Finish setup</strong> <span class="text-ink-2">· {stepsDone} of 5 steps done — next: {steps.find((x) => !x.done)?.title}</span></span>
+      <Icon name="arrow" size={16} class="ml-auto text-ink-2" />
+    </a>
+  )}
+
+  {stopDays.length > 0 && (
+    <div role="alert" class="mb-6 rounded-2xl bg-red-50 border border-red-200 p-4 flex items-start gap-3">
+      <span class="grid place-items-center size-9 rounded-lg bg-red-600 text-white shrink-0"><Icon name="x" size={18} /></span>
+      <div class="text-sm text-red-900">
+        <p class="font-bold">Wind over your {settings.windLimitMph ?? 15} mph limit on {stopDays.map((d) => dayTitle(d, today)).join(', ')}.</p>
+        <p>Call those customers now to reschedule or move to an indoor setup — weather cancellations get a free reschedule per your policy.</p>
+      </div>
+    </div>
+  )}
+
+  <section aria-label="Key numbers" class="grid grid-cols-2 md:grid-cols-3 xl:grid-cols-6 gap-3">
+    {kpis.map((k) => (
+      <a href={k.href} class="kpi block hover:border-brand/40 transition-colors">
+        <p class="kpi-label">{k.label}</p>
+        <p class="kpi-value">{k.value}</p>
+        <p class="text-xs text-ink-2 mt-1 flex items-center gap-1.5 flex-wrap">
+          {k.d && k.d.label !== '—' && <span class:list={['chip px-1.5', k.d.up ? 'bg-green-100 text-green-800' : 'bg-red-100 text-red-800']}>{k.d.label}</span>}
+          <span>{k.sub}</span>
+        </p>
+      </a>
+    ))}
+  </section>
+
+  <div class="grid gap-6 xl:grid-cols-[minmax(0,1fr)_360px] mt-6">
+    <div class="space-y-6 min-w-0">
+      <div class="grid gap-6 md:grid-cols-2">
+        {days.map(({ day, stops }) => (
+          <section class="card overflow-hidden" aria-labelledby={`d-${day}`}>
+            <header class="flex flex-wrap items-center gap-2 px-5 py-4 border-b border-line">
+              <div>
+                <h2 id={`d-${day}`} class="font-bold text-lg">{dayTitle(day, today)}</h2>
+                <p class="text-xs text-ink-2">{shortDay(day)} · {stops.filter((x) => x.kind === 'dropoff').length} drop-offs · {stops.filter((x) => x.kind === 'pickup').length} pickups</p>
+              </div>
+              <div class="ml-auto"><WeatherBadge risk={wx[day]} /></div>
+            </header>
+            {stops.length === 0 ? (
+              <div class="px-5 py-8 text-center">
+                <p class="text-sm font-semibold">No runs scheduled</p>
+                <p class="text-xs text-ink-2 mt-1">A free day — perfect for cleaning and repairs, or a quick social post.</p>
+                <a href="/app/bookings/new" class="btn-ghost mt-3 text-xs min-h-9">Add a phone booking</a>
+              </div>
+            ) : (
+              <ul class="divide-y divide-line">
+                {stops.map((x) => (
+                  <li>
+                    <a href={`/app/bookings/${x.booking.id}`} class="flex items-center gap-3 px-5 py-3 hover:bg-canvas">
+                      <span class:list={['grid place-items-center size-9 rounded-lg shrink-0', x.kind === 'dropoff' ? 'bg-brand-soft text-brand' : 'bg-pop/15 text-[#B23A0B]']} title={x.kind === 'dropoff' ? 'Drop-off' : 'Pickup'}>
+                        <Icon name={x.kind === 'dropoff' ? 'truck' : 'box'} size={18} />
+                      </span>
+                      <span class="min-w-0 flex-1">
+                        <span class="block text-sm font-semibold truncate">{x.customer?.name || 'Customer'} <span class="text-ink-2 font-normal">· #{x.booking.number}</span></span>
+                        <span class="block text-xs text-ink-2 truncate">{x.kind === 'dropoff' ? 'Drop by' : 'Pick up'} {time(x.dueAt, tz)} · {x.lines.map((l) => l.name).join(', ')}</span>
+                      </span>
+                      {x.done ? <span class="chip bg-green-100 text-green-800">Done</span> : <span class="text-xs font-semibold tabular-nums text-ink-2">{time(x.dueAt, tz)}</span>}
+                    </a>
+                  </li>
+                ))}
+              </ul>
+            )}
+            <footer class="px-5 py-3 border-t border-line bg-canvas/50">
+              <a href={`/app/deliveries?day=${day}`} class="text-sm font-semibold text-brand inline-flex items-center gap-1">Plan route & load list<Icon name="arrow" size={14} /></a>
+            </footer>
+          </section>
+        ))}
+      </div>
+
+      <section class="card" aria-labelledby="week-h">
+        <header class="flex items-center gap-2 px-5 py-4 border-b border-line">
+          <h2 id="week-h" class="font-bold text-lg">Next 7 days</h2>
+          <span class="text-xs text-ink-2">Weather checked against your {settings.windLimitMph ?? 15} mph wind limit</span>
+        </header>
+        {upcoming.length === 0 ? (
+          <div class="px-5 py-8 text-center">
+            <p class="text-sm font-semibold">Nothing booked this week yet</p>
+            <p class="text-xs text-ink-2 mt-1">Send a “weekend dates still open” text blast or boost an ad.</p>
+            <a href="/app/marketing" class="btn-ghost mt-3 text-xs min-h-9">Start a campaign</a>
+          </div>
+        ) : (
+          <div class="overflow-x-auto">
+            <table class="table">
+              <thead><tr><th scope="col">Day</th><th scope="col">Booking</th><th scope="col" class="hidden sm:table-cell">City</th><th scope="col">Weather</th><th scope="col" class="text-right">Total</th></tr></thead>
+              <tbody>
+                {upcoming.map((u) => {
+                  const d = localDay(u.startsAt, tz);
+                  return (
+                    <tr class="hover:bg-canvas/60">
+                      <td class="whitespace-nowrap"><span class="font-semibold">{dayTitle(d, today)}</span><span class="block text-xs text-ink-2">{time(u.startsAt, tz)}</span></td>
+                      <td><a class="font-semibold hover:text-brand" href={`/app/bookings/${u.id}`}>#{u.number}</a> <span class="text-ink-2">{u.name}</span></td>
+                      <td class="hidden sm:table-cell text-ink-2">{u.city || '—'}</td>
+                      <td><WeatherBadge risk={wx[d]} compact /></td>
+                      <td class="text-right tabular-nums font-semibold">{money(u.total)}</td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </section>
+
+      <section class="card" aria-labelledby="act-h">
+        <header class="px-5 py-4 border-b border-line"><h2 id="act-h" class="font-bold text-lg">Activity</h2></header>
+        {activity.length === 0 ? <p class="px-5 py-6 text-sm text-ink-2">Activity from bookings, payments and your crew shows up here.</p> : (
+          <ul class="divide-y divide-line">
+            {activity.map((a) => (
+              <li class="flex items-start gap-3 px-5 py-3">
+                <span class="grid place-items-center size-8 rounded-lg bg-canvas text-ink-2 shrink-0"><Icon name={actIcon[a.kind] ?? 'sparkle'} size={16} /></span>
+                <p class="text-sm flex-1 min-w-0">{a.message}</p>
+                <time class="text-xs text-ink-2 whitespace-nowrap" datetime={a.createdAt.toISOString()}>{ago(a.createdAt)}</time>
+              </li>
+            ))}
+          </ul>
+        )}
+      </section>
+    </div>
+
+    <aside class="space-y-6" aria-label="Goals and achievements">
+      <section class="card p-5 overflow-hidden relative" aria-labelledby="goal-h">
+        <div class="flex items-center gap-2">
+          <Icon name="target" class="text-pop" />
+          <h2 id="goal-h" class="font-bold">{thisMonth.label.split(' ')[0]} goal</h2>
+          <span class="ml-auto text-xs text-ink-2">{daysInMonth - dayOfMonth} days left</span>
+        </div>
+        <p class="mt-3 font-[family-name:var(--font-display)] text-3xl font-extrabold tabular-nums">{money(cur.revenue)} <span class="text-base font-semibold text-ink-2">/ {money(goal)}</span></p>
+        <div class="relative mt-3 h-3 rounded-full bg-canvas border border-line" role="progressbar" aria-label="Monthly revenue goal" aria-valuemin="0" aria-valuemax="100" aria-valuenow={goalPct}>
+          <div class="h-full rounded-full bg-gradient-to-r from-brand to-pop" style={`width:${Math.max(goalPct, 2)}%`}></div>
+          <span class="absolute -top-1 bottom-[-4px] w-0.5 bg-ink/40" style={`left:${pacePct}%`} title="Where you’d be at an even pace"></span>
+        </div>
+        <p class="text-xs text-ink-2 mt-2">
+          {goalPct >= 100 ? 'Goal smashed! Raise the bar?' : cur.revenue / goal >= dayOfMonth / daysInMonth ? `${goalPct}% there — ahead of pace. Keep it bouncing!` : `${goalPct}% there — ${money(Math.max(0, goal - cur.revenue))} to go. A weekend promo could close the gap.`}
+        </p>
+        {canManage && (
+          <details class="mt-3">
+            <summary class="text-xs font-semibold text-brand cursor-pointer">Change goal</summary>
+            <form method="post" class="mt-2 flex gap-2">
+              <input type="hidden" name="_action" value="goal" />
+              <label class="sr-only" for="goal">Monthly goal in dollars</label>
+              <input id="goal" name="goal" class="input" inputmode="decimal" value={String(goal / 100)} />
+              <button class="btn-primary">Save</button>
+            </form>
+          </details>
+        )}
+      </section>
+
+      <section class="card p-5 bg-ink text-white border-ink" aria-labelledby="streak-h">
+        <div class="flex items-center gap-4">
+          <span class="grid place-items-center size-14 rounded-2xl bg-pop text-[#1B1F4A]"><Icon name="bolt" size={28} /></span>
+          <div>
+            <h2 id="streak-h" class="text-sm font-semibold text-white/70">Party streak</h2>
+            <p class="font-[family-name:var(--font-display)] text-3xl font-extrabold tabular-nums">{streak} week{streak === 1 ? '' : 's'}</p>
+          </div>
+        </div>
+        <p class="text-xs text-white/70 mt-3">{streak ? 'Consecutive weeks with at least one event. Book one this week to keep it alive!' : 'Book an event this week to start a streak.'}</p>
+        <p class="text-xs text-white/70 mt-1">Today: {todayDrop} drop-off{todayDrop === 1 ? '' : 's'}, {todayPick} pickup{todayPick === 1 ? '' : 's'}.</p>
+      </section>
+
+      <section class="card p-5" aria-labelledby="ach-h">
+        <div class="flex items-center gap-2">
+          <Icon name="trophy" class="text-sun" />
+          <h2 id="ach-h" class="font-bold">Achievements</h2>
+          <span class="ml-auto text-xs font-semibold tabular-nums text-ink-2">{unlockedCount}/{ACHIEVEMENTS.length}</span>
+        </div>
+        {nextBadge && <p class="text-xs text-ink-2 mt-1">Next up: <strong class="text-ink">{nextBadge.title}</strong> — {nextBadge.text}</p>}
+        <ul class="grid grid-cols-4 gap-2 mt-4">
+          {ACHIEVEMENTS.map((a) => {
+            const at = ach.unlocked.get(a.key);
+            return (
+              <li class="text-center" title={`${a.title}: ${a.text}${at ? '' : ' (locked)'}`}>
+                <span class:list={['mx-auto grid place-items-center size-12 rounded-2xl', at ? a.tone : 'bg-canvas text-ink-2/40 border border-dashed border-line']}>
+                  <Icon name={at ? a.icon : 'shield'} size={20} />
+                </span>
+                <span class:list={['block text-[11px] leading-tight mt-1', at ? 'font-semibold' : 'text-ink-2']}>{a.title}</span>
+                <span class="sr-only">{at ? 'Unlocked' : 'Locked'}: {a.text}</span>
+              </li>
+            );
+          })}
+        </ul>
+      </section>
+    </aside>
+  </div>
+</AppLayout>

@@ -1,0 +1,77 @@
+---
+import { and, eq } from 'drizzle-orm';
+import { z } from 'zod';
+import AppLayout from '../../../../layouts/AppLayout.astro';
+import Icon from '../../../../components/Icon.astro';
+import BlockEditor from '../../../../islands/growth/BlockEditor.tsx';
+import { getDb, schema } from '../../../../db/client';
+import { formData, str, parse } from '../../../../lib/forms';
+import { slugify } from '../../../../lib/util';
+import { siteOrigin } from '../../../../lib/tenant';
+import { applyTitle } from '../../../../lib/seo';
+import { pagePath } from '../../../../lib/growth/blockdefs';
+import { ctx, done } from '../../../../lib/growth/app';
+
+const { t, tenantId, canEdit } = ctx(Astro);
+const id = Astro.params.id ?? '';
+if (!z.uuid().safeParse(id).success) return Astro.redirect('/app/website');
+const db = await getDb();
+const [page] = await db.select().from(schema.pages).where(and(eq(schema.pages.id, id), eq(schema.pages.tenantId, tenantId))).limit(1);
+if (!page) return Astro.redirect('/app/website');
+const [site] = await db.select().from(schema.sites).where(eq(schema.sites.tenantId, tenantId)).limit(1);
+const isHome = page.kind === 'page' && page.slug === '';
+
+const Meta = z.object({
+  title: z.string().min(3, 'Title is too short').max(120),
+  slug: z.string().max(60),
+  seoTitle: z.string().max(70, 'SEO title should be 70 characters or fewer'),
+  seoDescription: z.string().max(170, 'Meta description should be 170 characters or fewer'),
+});
+const f = await formData(Astro);
+if (f) {
+  if (!canEdit) return done(Astro, 'Only owners and managers can edit the website.', undefined, 'error');
+  const r = parse(Meta, { title: str(f, 'title', 200), slug: str(f, 'slug', 80), seoTitle: str(f, 'seoTitle', 200), seoDescription: str(f, 'seoDescription', 400) });
+  if (!r.ok) return done(Astro, Object.values(r.errors)[0], undefined, 'error');
+  const slug = isHome ? '' : slugify(r.data.slug || r.data.title);
+  if (slug !== page.slug) {
+    const [dupe] = await db.select({ id: schema.pages.id }).from(schema.pages).where(and(eq(schema.pages.tenantId, tenantId), eq(schema.pages.kind, page.kind), eq(schema.pages.slug, slug))).limit(1);
+    if (dupe) return done(Astro, `Another ${page.kind} already uses “${slug}”.`, undefined, 'error');
+  }
+  await db.update(schema.pages).set({ title: r.data.title, slug, seoTitle: r.data.seoTitle || null, seoDescription: r.data.seoDescription || null, updatedAt: new Date() })
+    .where(and(eq(schema.pages.id, id), eq(schema.pages.tenantId, tenantId)));
+  return done(Astro, slug !== page.slug ? `Saved. URL changed — add a redirect from ${pagePath(page.kind, page.slug)} in SEO → Migration.` : 'Page details saved.');
+}
+
+const origin = await siteOrigin(t);
+const previewUrl = origin + pagePath(page.kind, page.slug);
+const fullTitle = applyTitle(site?.titleTemplate ?? '%s | {business}', page.seoTitle ?? page.title, t.name);
+const desc = page.seoDescription ?? site?.defaultDescription ?? '';
+---
+<AppLayout title={`Edit: ${page.title}`} section="website" subtitle={`${page.kind === 'post' ? 'Blog post' : page.kind === 'city' ? 'City page' : page.kind === 'landing' ? 'Landing page' : 'Page'} · ${pagePath(page.kind, page.slug)} · ${page.status === 'published' ? 'Live' : 'Draft'}`} wide>
+  <a slot="actions" href="/app/website" class="btn-ghost">← All pages</a>
+  {page.kind === 'city' && <a slot="actions" href={`/app/seo/city/${page.id}`} class="btn-ghost"><Icon name="map" size={16} />Local facts</a>}
+  <div class="grid gap-6 xl:grid-cols-[1fr_380px]">
+    <section aria-label="Blocks">
+      {canEdit ? <BlockEditor client:load pageId={page.id} initial={page.blocks} previewUrl={previewUrl} /> : <p class="card p-6 text-sm">You have view-only access.</p>}
+    </section>
+    <aside class="space-y-4">
+      <form method="post" class="card p-4 space-y-3">
+        <h2 class="font-bold">Page details & SEO</h2>
+        <div><label class="label" for="title">Title</label><input class="input" id="title" name="title" value={page.title} required maxlength="120" /></div>
+        {!isHome && <div><label class="label" for="slug">URL slug</label><input class="input" id="slug" name="slug" value={page.slug} maxlength="60" pattern="[a-z0-9-]*" /><p class="hint">Changing a live URL? Add a 301 redirect in SEO → Migration.</p></div>}
+        <div><label class="label" for="seoTitle">SEO title <span class="font-normal text-ink-2">(optional)</span></label><input class="input" id="seoTitle" name="seoTitle" value={page.seoTitle ?? ''} maxlength="70" placeholder={page.title} /></div>
+        <div><label class="label" for="seoDescription">Meta description</label><textarea class="input" id="seoDescription" name="seoDescription" maxlength="170" rows="3" placeholder={site?.defaultDescription}>{page.seoDescription ?? ''}</textarea><p class="hint">Aim for 110–160 characters with a call to action.</p></div>
+        {canEdit && <button class="btn-primary w-full">Save details</button>}
+      </form>
+      <div class="card p-4">
+        <h2 class="font-bold text-sm mb-2">Google preview</h2>
+        <div class="rounded-xl border border-line p-3 bg-white">
+          <p class="text-xs text-ink-2 truncate">{previewUrl.replace(/^https?:\/\//, '')}</p>
+          <p class="text-[#1a0dab] text-base leading-snug mt-0.5 line-clamp-2">{fullTitle}</p>
+          <p class="text-xs text-ink-2 mt-1 line-clamp-3">{desc}</p>
+        </div>
+        <p class="hint">Title {fullTitle.length} chars · description {desc.length} chars. <a class="text-brand font-semibold" href="/app/seo">See SEO score →</a></p>
+      </div>
+    </aside>
+  </div>
+</AppLayout>

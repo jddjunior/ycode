@@ -1,0 +1,39 @@
+---
+import type { SiteCtx, Item } from '../../lib/site/data';
+import { firstImage, packageSavings } from '../../lib/site/data';
+import { money } from '../../lib/pricing';
+interface Props { ctx: SiteCtx; item: Item; free?: number | null; dayLabel?: string; eager?: boolean; headingLevel?: 'h2' | 'h3' }
+const { ctx, item, free = null, dayLabel, eager = false, headingLevel = 'h3' } = Astro.props;
+const H = headingLevel;
+const s = item.specs ?? {};
+const cat = item.categoryId ? ctx.catById.get(item.categoryId) : null;
+const savings = item.kind === 'package' ? packageSavings(item, ctx.itemById).savingsCents : 0;
+const facts = [
+  s.lengthFt && s.widthFt ? `${s.lengthFt}×${s.widthFt} ft` : null,
+  s.ageRange ? `Ages ${s.ageRange.replace(/\s*\(.*\)/, '')}` : null,
+  s.maxRiders ? `${s.maxRiders} riders` : null,
+].filter(Boolean);
+const url = ctx.href(ctx.itemPath(item));
+---
+<article class="s-card s-pcard group relative">
+  <div class="s-pimg">
+    <img src={firstImage(item)} alt={`${item.name}${s.theme ? ` — ${s.theme} theme` : ''} set up for a party`} width="800" height="600" loading={eager ? 'eager' : 'lazy'} decoding="async" />
+    <div class="absolute top-3 left-3 flex flex-wrap gap-1.5">
+      {item.isWet && <span class="s-chip s-chip-wet">💧 Wet/dry</span>}
+      {item.kind === 'package' && savings > 0 && <span class="s-chip s-chip-warn">Save {money(savings)}</span>}
+      {free != null ? (
+        <span class={`s-chip ${free === 0 ? 's-chip-bad' : free === 1 ? 's-chip-warn' : 's-chip-ok'}`}>{free === 0 ? `Booked ${dayLabel}` : free === 1 ? `Last one for ${dayLabel}` : `Open ${dayLabel}`}</span>
+      ) : <span data-avail-id={item.id} hidden class="s-chip"></span>}
+    </div>
+  </div>
+  <div class="p-4 sm:p-5 flex flex-col gap-2 flex-1">
+    {cat && item.kind !== 'package' && <p class="text-xs font-extrabold uppercase tracking-wider s-sub">{cat.name}</p>}
+    <H class="font-display text-lg font-bold leading-snug"><a href={url} class="after:absolute after:inset-0 focus-visible:outline-none">{item.name}</a></H>
+    {item.tagline && <p class="text-sm s-sub line-clamp-2">{item.tagline}</p>}
+    {facts.length > 0 && <p class="text-xs font-bold s-sub">{facts.join(' · ')}</p>}
+    <div class="mt-auto pt-3 flex items-end justify-between gap-3">
+      <p class="leading-tight"><span class="s-price text-xl">{money(item.priceCents)}</span><span class="text-xs s-sub block">{item.kind === 'addon' ? 'add-on · per event' : `up to ${item.baseHours} hrs · setup included`}</span></p>
+      <span class="relative z-10 s-btn s-btn-primary s-btn-sm pointer-events-none" aria-hidden="true">{free === 0 ? 'Details' : 'Book'}</span>
+    </div>
+  </div>
+</article>

@@ -1,0 +1,6 @@
+---
+import { STATUS } from '../../lib/ops/ctx';
+interface Props { status: string }
+const m = STATUS[Astro.props.status] ?? { label: Astro.props.status, cls: 'bg-canvas text-ink-2' };
+---
+<span class:list={['chip', m.cls]}>{m.label}</span>

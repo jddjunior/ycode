@@ -1,0 +1,134 @@
+---
+import { and, asc, desc, eq, sql } from 'drizzle-orm';
+import { z } from 'zod';
+import { randomUUID } from 'node:crypto';
+import AppLayout from '../../../layouts/AppLayout.astro';
+import Icon from '../../../components/Icon.astro';
+import { getDb, schema } from '../../../db/client';
+import { formData, str, cents, list, bool } from '../../../lib/forms';
+import { siteOrigin } from '../../../lib/tenant';
+import { PLANS } from '../../../lib/plans';
+import { money } from '../../../lib/pricing';
+import { buildCreative } from '../../../lib/growth/ads';
+import { ctx, done, pct } from '../../../lib/growth/app';
+
+const { t, tenantId, canEdit } = ctx(Astro);
+const db = await getDb();
+const plan = PLANS[t.plan];
+const cityRows = await db.select({ local: schema.pages.local, title: schema.pages.title }).from(schema.pages).where(and(eq(schema.pages.tenantId, tenantId), eq(schema.pages.kind, 'city'))).orderBy(asc(schema.pages.slug));
+const cities = [...new Set([t.city, ...cityRows.map((r) => r.local?.city).filter((c): c is string => !!c)])].filter(Boolean);
+const cats = await db.select({ name: schema.categories.name, slug: schema.categories.slug }).from(schema.categories).where(eq(schema.categories.tenantId, tenantId)).orderBy(asc(schema.categories.sort));
+const adCats = cats.filter((c) => !/add-ons|tables/.test(c.slug));
+
+const Build = z.object({
+  network: z.enum(['google', 'meta']),
+  name: z.string().min(3, 'Name the campaign').max(100),
+  cities: z.array(z.string().refine((c) => cities.includes(c), 'Unknown city')).min(1, 'Pick at least one city').max(10),
+  categories: z.array(z.string().refine((c) => cats.some((x) => x.slug === c), 'Unknown category')).min(1, 'Pick at least one category').max(6),
+  dailyBudgetCents: z.number().int().min(500, 'Minimum $5/day').max(100_000, 'Maximum $1,000/day'),
+  usps: z.array(z.string().max(30, 'Selling points must fit a 30-character headline')).max(5),
+  managed: z.boolean(),
+});
+
+const f = await formData(Astro);
+if (f) {
+  if (!canEdit) return done(Astro, 'Only owners and managers can build campaigns.', undefined, 'error');
+  const r = Build.safeParse({
+    network: str(f, 'network', 10), name: str(f, 'name', 100), cities: f.getAll('cities').map(String), categories: f.getAll('categories').map(String),
+    dailyBudgetCents: cents(f, 'budget'), usps: list(f, 'usps'), managed: bool(f, 'managed'),
+  });
+  if (!r.success) return done(Astro, r.error.issues[0].message, undefined, 'error');
+  const d = r.data;
+  if (d.network === 'google' && d.cities.length * d.categories.length > 40) return done(Astro, 'Keep it to 40 ad groups or fewer (cities × categories).', undefined, 'error');
+  const id = randomUUID();
+  const creative = await buildCreative({
+    network: d.network, business: t.name, state: t.state, origin: await siteOrigin(t), campaignKey: id,
+    cities: d.cities, categories: cats.filter((c) => d.categories.includes(c.slug)), usps: d.usps,
+  });
+  await db.insert(schema.adCampaigns).values({ id, tenantId, network: d.network, name: d.name, cities: d.cities, creative, dailyBudgetCents: d.dailyBudgetCents, managed: d.managed, status: 'draft' });
+  return done(Astro, `Built ${creative.adGroups.length} ad group${creative.adGroups.length === 1 ? '' : 's'}. Review the copy, then launch.`, `/app/ads/${id}`);
+}
+
+const camps = await db.select().from(schema.adCampaigns).where(eq(schema.adCampaigns.tenantId, tenantId)).orderBy(desc(schema.adCampaigns.createdAt));
+const attributed = new Map((await db.select({ k: sql<string>`${schema.bookings.attribution}->>'utmCampaign'`, n: sql<number>`count(*)::int`, rev: sql<number>`coalesce(sum(${schema.bookings.subtotalCents}),0)::int` })
+  .from(schema.bookings).where(and(eq(schema.bookings.tenantId, tenantId), sql`${schema.bookings.status} not in ('hold','canceled')`, sql`${schema.bookings.attribution}->>'utmCampaign' is not null`))
+  .groupBy(sql`${schema.bookings.attribution}->>'utmCampaign'`)).map((r) => [r.k, r]));
+const [paid] = await db.select({ n: sql<number>`count(*)::int`, rev: sql<number>`coalesce(sum(${schema.bookings.subtotalCents}),0)::int` }).from(schema.bookings)
+  .where(and(eq(schema.bookings.tenantId, tenantId), sql`${schema.bookings.status} not in ('hold','canceled')`, sql`${schema.bookings.attribution}->>'channel' in ('paid_search','paid_social')`));
+const tot = camps.reduce((a, c) => ({ spend: a.spend + c.spendCents, clicks: a.clicks + c.clicks, impr: a.impr + c.impressions, conv: a.conv + c.conversions }), { spend: 0, clicks: 0, impr: 0, conv: 0 });
+const bookingsFor = (c: (typeof camps)[number]) => Math.max(c.conversions, attributed.get(c.id)?.n ?? 0);
+const cpb = (spend: number, n: number) => (n ? money(Math.round(spend / n)) : '—');
+const [fees] = await db.select({ total: sql<number>`coalesce(sum(${schema.revenueEvents.amountCents}),0)::int` }).from(schema.revenueEvents).where(and(eq(schema.revenueEvents.tenantId, tenantId), eq(schema.revenueEvents.kind, 'ads_management_fee')));
+const STATUS: Record<string, string> = { draft: 'bg-canvas text-ink-2', pending_launch: 'bg-sun/30 text-[#7A5200]', live: 'bg-green-50 text-green-800', paused: 'bg-sky-100 text-sky-800', ended: 'bg-canvas text-ink-2' };
+---
+<AppLayout title="Ads" section="ads" subtitle="Google Search and Meta campaigns built for rental operators — with the one number agencies never show you: cost per booking." wide>
+  <div class="grid gap-3 grid-cols-2 lg:grid-cols-5 mb-6">
+    <div class="kpi"><p class="kpi-label">Ad spend</p><p class="kpi-value">{money(tot.spend)}</p></div>
+    <div class="kpi"><p class="kpi-label">Clicks</p><p class="kpi-value">{tot.clicks.toLocaleString()}</p><p class="hint">CTR {tot.impr ? ((tot.clicks / tot.impr) * 100).toFixed(1) + '%' : '—'}</p></div>
+    <div class="kpi"><p class="kpi-label">Bookings</p><p class="kpi-value">{camps.reduce((s, c) => s + bookingsFor(c), 0)}</p><p class="hint">{paid.n} paid-channel bookings tracked</p></div>
+    <div class="kpi bg-ink text-white border-ink"><p class="kpi-label text-white/60">Cost per booking</p><p class="kpi-value text-sun">{cpb(tot.spend, camps.reduce((s, c) => s + bookingsFor(c), 0))}</p><p class="text-xs text-white/60 mt-1">The number that matters</p></div>
+    <div class="kpi col-span-2 lg:col-span-1"><p class="kpi-label">Management fees paid</p><p class="kpi-value">{money(fees.total)}</p><p class="hint">{pct(plan.adsManagementBps)} of managed spend</p></div>
+  </div>
+
+  <div class="grid gap-6 xl:grid-cols-[1fr_380px]">
+    <section class="card overflow-hidden min-w-0" aria-labelledby="camps-h">
+      <h2 id="camps-h" class="font-bold px-4 py-3 border-b border-line">Campaigns</h2>
+      {camps.length === 0 ? <p class="p-6 text-sm text-ink-2">No campaigns yet. Build your first Search campaign on the right — it takes a minute.</p> : (
+        <div class="overflow-x-auto">
+          <table class="table min-w-[760px]">
+            <thead><tr><th>Campaign</th><th>Status</th><th class="text-right">Budget/day</th><th class="text-right">Spend</th><th class="text-right">Clicks</th><th class="text-right">Bookings</th><th class="text-right">Cost / booking</th><th></th></tr></thead>
+            <tbody>
+              {camps.map((c) => (
+                <tr>
+                  <td>
+                    <a class="font-semibold hover:text-brand" href={`/app/ads/${c.id}`}>{c.name}</a>
+                    <p class="text-xs text-ink-2">{c.network === 'google' ? 'Google Search' : 'Meta'} · {c.creative.adGroups.length} ad groups · {c.cities.join(', ')}</p>
+                    {c.managed && <span class="chip bg-brand-soft text-brand mt-1">Managed by Branch Avenue</span>}
+                  </td>
+                  <td><span class:list={['chip', STATUS[c.status]]}>{c.status.replace('_', ' ')}</span></td>
+                  <td class="text-right tabular-nums">{money(c.dailyBudgetCents)}</td>
+                  <td class="text-right tabular-nums">{money(c.spendCents)}</td>
+                  <td class="text-right tabular-nums">{c.clicks.toLocaleString()}</td>
+                  <td class="text-right tabular-nums">{bookingsFor(c)}</td>
+                  <td class="text-right tabular-nums font-semibold">{cpb(c.spendCents, bookingsFor(c))}</td>
+                  <td class="text-right">{c.network === 'google' && <a class="text-xs text-brand font-semibold whitespace-nowrap" href={`/api/app/ads/${c.id}.csv`}>CSV ↓</a>}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+      <div class="px-4 py-3 border-t border-line text-xs text-ink-2 flex gap-2"><Icon name="shield" size={14} class="shrink-0 mt-0.5" />Search-only, exact & phrase match, with negatives like “for sale”, “used” and “jobs” pre-loaded. We never use Smart campaigns that spread budget onto random display sites.</div>
+    </section>
+
+    {canEdit && (
+      <form method="post" class="card p-4 space-y-4 h-fit" aria-labelledby="build-h">
+        <h2 id="build-h" class="font-bold text-lg">Build a campaign</h2>
+        <fieldset><legend class="label">Network</legend>
+          <div class="grid grid-cols-2 gap-2">
+            <label class="rounded-xl border border-line p-3 text-sm cursor-pointer has-[:checked]:border-brand has-[:checked]:bg-brand-soft/40"><input type="radio" name="network" value="google" checked class="sr-only" /><span class="font-semibold block">Google Search</span><span class="text-xs text-ink-2">High intent. Start here.</span></label>
+            <label class="rounded-xl border border-line p-3 text-sm cursor-pointer has-[:checked]:border-brand has-[:checked]:bg-brand-soft/40"><input type="radio" name="network" value="meta" class="sr-only" /><span class="font-semibold block">Meta</span><span class="text-xs text-ink-2">Cheaper reach, lower intent.</span></label>
+          </div>
+        </fieldset>
+        <div><label class="label" for="ad-name">Name</label><input class="input" id="ad-name" name="name" required maxlength="100" value={`${t.city} — Spring bookings`} /></div>
+        <fieldset><legend class="label">Cities</legend>
+          <div class="flex flex-wrap gap-1.5 max-h-36 overflow-y-auto">{cities.map((c, i) => <label class="chip bg-canvas text-ink border border-line py-1.5 px-3 cursor-pointer has-[:checked]:bg-brand has-[:checked]:text-white has-[:checked]:border-brand"><input type="checkbox" name="cities" value={c} checked={i === 0} class="sr-only" />{c}</label>)}</div>
+        </fieldset>
+        <fieldset><legend class="label">Categories</legend>
+          <div class="flex flex-wrap gap-1.5">{adCats.map((c, i) => <label class="chip bg-canvas text-ink border border-line py-1.5 px-3 cursor-pointer has-[:checked]:bg-brand has-[:checked]:text-white has-[:checked]:border-brand"><input type="checkbox" name="categories" value={c.slug} checked={i < 2} class="sr-only" />{c.name}</label>)}</div>
+          <p class="hint">Google: one ad group per city × category, with its own keywords and city-specific ads.</p>
+        </fieldset>
+        <div><label class="label" for="usps">Your selling points <span class="font-normal text-ink-2">(≤30 chars each, one per line)</span></label><textarea class="input" id="usps" name="usps" rows="3" placeholder="Free Delivery Over $250&#10;Family Owned Since 2015"></textarea><p class="hint">Only true facts — we’ll never invent claims.</p></div>
+        <div><label class="label" for="budget">Daily budget</label>
+          <div class="relative"><span class="absolute left-3 top-1/2 -translate-y-1/2 text-ink-2">$</span><input class="input pl-7" id="budget" name="budget" inputmode="decimal" value="25" required /></div>
+          <p class="hint">≈ {money(2500 * 30)}/month at $25/day. Most single-truck operators start at $15–$40/day.</p></div>
+        <label class="flex gap-3 rounded-xl border-2 border-dashed border-brand/30 p-3 cursor-pointer has-[:checked]:border-solid has-[:checked]:border-brand has-[:checked]:bg-brand-soft/40">
+          <input type="checkbox" name="managed" class="mt-1 size-4 accent-[var(--color-brand)] shrink-0" />
+          <span class="text-sm"><span class="font-semibold block">Managed by Branch Avenue</span>
+            <span class="text-ink-2 text-xs block mt-0.5">Our team launches, optimizes and reports weekly. Fee: <strong>{pct(plan.adsManagementBps)} of ad spend</strong> on {plan.name} — no setup fee, cancel anytime. Agencies typically charge 10–20% of spend or $500–$2,000/mo, often with setup fees.</span></span>
+        </label>
+        <button class="btn-primary w-full"><Icon name="sparkle" size={16} />Build campaign</button>
+      </form>
+    )}
+  </div>
+</AppLayout>

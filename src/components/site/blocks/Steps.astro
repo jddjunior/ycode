@@ -1,0 +1,28 @@
+---
+import type { SiteCtx } from '../../../lib/site/data';
+import { depositText } from '../../../lib/site/data';
+import { money } from '../../../lib/pricing';
+interface Props { ctx: SiteCtx; props: Record<string, unknown> }
+const { ctx, props: p } = Astro.props;
+const steps = (Array.isArray(p.steps) ? p.steps : []) as { title?: string; text?: string }[];
+const policy = ctx.tenant.settings?.cancellationPolicy;
+---
+<section class="s-wrap s-section">
+  <div class="grid lg:grid-cols-[.8fr_1.2fr] gap-10 items-start">
+    <div>
+      <h2 class="s-h2">{String(p.title ?? 'How it works')}</h2>
+      <p class="s-lede mt-4">{depositText(ctx.tenant, money)}. Instant confirmation — no “we’ll get back to you in 24 hours.”</p>
+      {policy && <p class="mt-4 text-sm font-semibold s-sub max-w-md">{policy}</p>}
+      <a href={ctx.href('/rentals#check')} class="mt-6 s-btn s-btn-cta s-btn-lg">Start with your date</a>
+    </div>
+    <ol class="grid gap-4 sm:grid-cols-3 lg:grid-cols-1 xl:grid-cols-3">
+      {steps.map((s, i) => (
+        <li class="s-card p-6 relative">
+          <span class="font-display text-5xl font-bold text-primary/90 leading-none s-mono">{String(i + 1).padStart(2, '0')}</span>
+          <h3 class="s-h3 mt-4">{s.title}</h3>
+          <p class="text-sm s-sub mt-2 leading-relaxed">{s.text}</p>
+        </li>
+      ))}
+    </ol>
+  </div>
+</section>

@@ -1,0 +1,86 @@
+---
+/** Inventory list: rentals, add-ons and packages with live status. */
+import { and, eq, gt, inArray, isNull, or, sql } from 'drizzle-orm';
+import AppLayout from '../../../layouts/AppLayout.astro';
+import Icon from '../../../components/Icon.astro';
+import { getDb, schema } from '../../../db/client';
+import { money } from '../../../lib/pricing';
+import { opsCtx } from '../../../lib/ops/ctx';
+import { utilization } from '../../../lib/ops/stats';
+
+const { t, today, canManage } = opsCtx(Astro);
+const db = await getDb();
+const kind = Astro.url.searchParams.get('kind') ?? 'all';
+const search = (Astro.url.searchParams.get('q') ?? '').trim().toLowerCase().slice(0, 60);
+const [items, cats, oos, util] = await Promise.all([
+  db.select().from(schema.items).where(eq(schema.items.tenantId, t.id)).orderBy(schema.items.sort, schema.items.name),
+  db.select().from(schema.categories).where(eq(schema.categories.tenantId, t.id)),
+  db.select({ itemId: schema.maintenanceLogs.itemId, units: sql<number>`sum(${schema.maintenanceLogs.unitsAffected})::int`, kind: sql<string>`max(${schema.maintenanceLogs.kind})` }).from(schema.maintenanceLogs)
+    .where(and(eq(schema.maintenanceLogs.tenantId, t.id), inArray(schema.maintenanceLogs.kind, ['repair', 'retired']), or(isNull(schema.maintenanceLogs.outOfServiceUntil), gt(schema.maintenanceLogs.outOfServiceUntil, sql`now()`))))
+    .groupBy(schema.maintenanceLogs.itemId),
+  utilization(t, today, 30),
+]);
+const cat = new Map(cats.map((c) => [c.id, c.name]));
+const down = new Map(oos.map((o) => [o.itemId, o]));
+const counts = { all: items.length, rental: items.filter((i) => i.kind === 'rental').length, addon: items.filter((i) => i.kind === 'addon').length, package: items.filter((i) => i.kind === 'package').length };
+const shown = items.filter((i) => (kind === 'all' || i.kind === kind) && (!search || i.name.toLowerCase().includes(search) || (i.categoryId && cat.get(i.categoryId)?.toLowerCase().includes(search))));
+const units = items.filter((i) => i.kind !== 'package').reduce((s, i) => s + i.quantity, 0);
+const kindLabel: Record<string, string> = { rental: 'Rental', addon: 'Add-on', package: 'Package' };
+---
+<AppLayout title="Inventory" section="inventory" subtitle={`${counts.rental} rentals · ${counts.addon} add-ons · ${counts.package} packages · ${units} units owned`} wide>
+  <Fragment slot="actions">{canManage && <a href="/app/inventory/new" class="btn-primary"><Icon name="plus" size={16} />Add item</a>}</Fragment>
+
+  <div class="flex flex-wrap gap-3 items-center">
+    <nav aria-label="Item type" class="flex gap-1.5 overflow-x-auto">
+      {(['all', 'rental', 'addon', 'package'] as const).map((k) => (
+        <a href={`?kind=${k}${search ? `&q=${encodeURIComponent(search)}` : ''}`} aria-current={kind === k ? 'page' : undefined} class:list={['whitespace-nowrap rounded-full px-3.5 py-1.5 text-sm font-semibold border', kind === k ? 'bg-ink text-white border-ink' : 'bg-white border-line text-ink-2 hover:text-ink']}>
+          {k === 'all' ? 'All' : kindLabel[k] + 's'} <span class="opacity-60">{counts[k]}</span>
+        </a>
+      ))}
+    </nav>
+    <form method="get" class="sm:ml-auto flex gap-2 w-full sm:w-auto">
+      <input type="hidden" name="kind" value={kind} />
+      <label for="q" class="sr-only">Search inventory</label>
+      <input id="q" name="q" type="search" class="input sm:w-64" placeholder="Search items or categories" value={search} />
+      <button class="btn-ghost" aria-label="Search"><Icon name="search" size={16} /></button>
+    </form>
+  </div>
+
+  {items.length === 0 ? (
+    <div class="card p-10 text-center mt-4">
+      <span class="mx-auto grid place-items-center size-12 rounded-2xl bg-brand-soft text-brand"><Icon name="box" /></span>
+      <h2 class="font-bold text-lg mt-3">Add your first bounce house</h2>
+      <p class="text-sm text-ink-2 mt-1">Items appear on your website with live availability the moment you save them.</p>
+      <a href="/app/inventory/new" class="btn-primary mt-4"><Icon name="plus" size={16} />Add item</a>
+    </div>
+  ) : shown.length === 0 ? (
+    <p class="card p-6 mt-4 text-sm text-ink-2">No items match “{search}”.</p>
+  ) : (
+    <ul class="grid gap-3 sm:grid-cols-2 xl:grid-cols-3 mt-4">
+      {shown.map((i) => {
+        const d = down.get(i.id);
+        const booked = util.perItem.get(i.id) ?? 0;
+        const u = i.kind === 'rental' && i.quantity ? Math.min(100, Math.round((booked / (i.quantity * 30)) * 100)) : null;
+        return (
+          <li>
+            <a href={`/app/inventory/${i.id}`} class:list={['card p-3 flex gap-3 hover:border-brand/40 transition-colors h-full', !i.active && 'opacity-70']}>
+              {i.images[0] ? <img src={i.images[0]} alt="" class="size-20 rounded-xl object-cover bg-canvas border border-line shrink-0" loading="lazy" /> : <span class="size-20 rounded-xl bg-canvas grid place-items-center shrink-0"><Icon name="box" /></span>}
+              <div class="min-w-0 flex-1">
+                <p class="font-semibold leading-snug line-clamp-2">{i.name}</p>
+                <p class="text-xs text-ink-2 mt-0.5">{kindLabel[i.kind]}{i.categoryId && cat.get(i.categoryId) ? ` · ${cat.get(i.categoryId)}` : ''}</p>
+                <p class="text-sm font-bold tabular-nums mt-1">{money(i.priceCents)} <span class="text-xs font-normal text-ink-2">/ {i.baseHours}h{i.kind !== 'package' ? ` · ${i.quantity} unit${i.quantity === 1 ? '' : 's'}` : ` · ${i.bundle.length} items`}</span></p>
+                <div class="flex flex-wrap gap-1 mt-1.5">
+                  {!i.active && <span class="chip bg-gray-100 text-gray-600">Hidden</span>}
+                  {i.featured && <span class="chip bg-sun/30 text-[#7A5200]"><Icon name="star" size={11} />Featured</span>}
+                  {i.isWet && <span class="chip bg-sky-100 text-sky-800">Wet</span>}
+                  {d && <span class="chip bg-red-100 text-red-800"><Icon name="wrench" size={11} />{d.kind === 'retired' ? 'Retired' : `${d.units} in repair`}</span>}
+                  {u !== null && <span class="chip bg-canvas border border-line text-ink-2" title="Share of unit-days booked in the next 30 days">{u}% booked · 30d</span>}
+                </div>
+              </div>
+            </a>
+          </li>
+        );
+      })}
+    </ul>
+  )}
+</AppLayout>

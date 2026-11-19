@@ -1,0 +1,150 @@
+---
+/** Reports: revenue (month / category / channel), utilization & ROI, sales tax, balances, platform fees. */
+import AppLayout from '../../../layouts/AppLayout.astro';
+import Icon from '../../../components/Icon.astro';
+import ColumnChart from '../../../components/ops/ColumnChart.astro';
+import HBars from '../../../components/ops/HBars.astro';
+import { money } from '../../../lib/pricing';
+import { opsCtx, CHANNELS, addDays } from '../../../lib/ops/ctx';
+import { lastMonths, revenueByMonth, revenueByCategory, revenueByChannel, salesTax, balances, itemPerformance } from '../../../lib/ops/reports';
+
+const { t, today } = opsCtx(Astro);
+const q = Astro.url.searchParams;
+const thisYear = Number(today.slice(0, 4));
+const year = Math.min(thisYear + 1, Math.max(2015, Number(q.get('year')) || thisYear));
+const period = q.get('period') === 'quarter' ? 'quarter' : 'month';
+const range = q.get('range') === '90' ? 90 : q.get('range') === 'all' ? 3650 : 365;
+const fromDay = addDays(today, -range);
+
+const months = lastMonths(t, 12);
+const [byMonth, byCat, byChannel, tax, bal, perf] = await Promise.all([
+  revenueByMonth(t, months), revenueByCategory(t, fromDay), revenueByChannel(t, fromDay), salesTax(t, year, period), balances(t), itemPerformance(t, 90),
+]);
+const yr = byMonth.reduce((a, m) => ({ revenue: a.revenue + m.revenue, collected: a.collected + m.collected, fees: a.fees + m.fees, n: a.n + m.n }), { revenue: 0, collected: 0, fees: 0, n: 0 });
+const taxTotal = tax.reduce((a, r) => ({ taxable: a.taxable + r.taxable, tax: a.tax + r.tax, gross: a.gross + r.gross }), { taxable: 0, tax: 0, gross: 0 });
+const short = (c: number) => (c >= 100_000 ? `$${(c / 100_000).toFixed(c >= 1_000_000 ? 0 : 1)}k` : `$${Math.round(c / 100)}`);
+const outstanding = Math.max(0, bal.upcoming_total - bal.upcoming_paid);
+const rangeLabel = range === 90 ? 'last 90 days' : range === 365 ? 'last 12 months' : 'all time';
+const csv = (name: string, extra = '') => `/api/app/reports/${name}.csv${extra}`;
+---
+<AppLayout title="Reports" section="reports" subtitle="Money in, money owed and what’s earning its keep." wide>
+  <Fragment slot="actions">
+    <a href={csv('revenue')} class="btn-ghost" download><Icon name="arrow" size={16} class="rotate-90" />Revenue CSV</a>
+    <a href={csv('tax', `?year=${year}&period=${period}`)} class="btn-ghost" download><Icon name="arrow" size={16} class="rotate-90" />Sales tax CSV</a>
+  </Fragment>
+
+  <section class="grid grid-cols-2 lg:grid-cols-4 gap-3" aria-label="12-month summary">
+    <div class="kpi"><p class="kpi-label">Booked · 12 mo</p><p class="kpi-value">{money(yr.revenue)}</p><p class="text-xs text-ink-2 mt-1">{yr.n} bookings · avg {money(yr.n ? Math.round(yr.revenue / yr.n) : 0)}</p></div>
+    <div class="kpi"><p class="kpi-label">Collected · 12 mo</p><p class="kpi-value">{money(yr.collected)}</p><p class="text-xs text-ink-2 mt-1">All payment methods</p></div>
+    <div class="kpi"><p class="kpi-label">Outstanding (upcoming)</p><p class="kpi-value">{money(outstanding)}</p><p class="text-xs text-ink-2 mt-1">{bal.upcoming_n} events · {money(bal.upcoming_paid)} collected</p></div>
+    <div class="kpi"><p class="kpi-label">Platform fees · 12 mo</p><p class="kpi-value">{money(yr.fees)}</p><p class="text-xs text-ink-2 mt-1">{yr.collected ? ((yr.fees / yr.collected) * 100).toFixed(2) : '0.00'}% of collected</p></div>
+  </section>
+
+  <section class="card p-5 mt-6" aria-labelledby="rm-h">
+    <div class="flex flex-wrap items-center gap-2">
+      <h2 id="rm-h" class="font-bold text-lg">Booked revenue by month</h2>
+      <p class="text-xs text-ink-2">By event date · pending, confirmed & completed</p>
+      <a href={csv('revenue')} class="ml-auto text-xs font-semibold text-brand" download>Download CSV</a>
+    </div>
+    <div class="mt-4"><ColumnChart title="Booked revenue by month, last 12 months" data={byMonth.map((m) => ({ label: m.label, value: m.revenue, display: money(m.revenue) }))} unit={short} /></div>
+    <div class="overflow-x-auto mt-4">
+      <table class="table">
+        <thead><tr><th scope="col">Month</th><th scope="col" class="text-right">Bookings</th><th scope="col" class="text-right">Booked</th><th scope="col" class="text-right">Collected</th><th scope="col" class="text-right">Platform fees</th></tr></thead>
+        <tbody>{[...byMonth].reverse().filter((m) => m.n || m.collected).map((m) => (
+          <tr><td>{m.label}</td><td class="text-right tabular-nums">{m.n}</td><td class="text-right tabular-nums font-semibold">{money(m.revenue)}</td><td class="text-right tabular-nums">{money(m.collected)}</td><td class="text-right tabular-nums text-ink-2">{money(m.fees)}</td></tr>
+        ))}</tbody>
+      </table>
+    </div>
+  </section>
+
+  <div class="flex flex-wrap items-center gap-2 mt-8 mb-3">
+    <h2 class="font-bold text-lg">Where revenue comes from</h2>
+    <nav class="ml-auto flex gap-1.5" aria-label="Range">
+      {[['90', 'Last 90 days'], ['365', '12 months'], ['all', 'All time']].map(([k, l]) => (
+        <a href={`?range=${k}&year=${year}&period=${period}`} aria-current={(k === 'all' ? 3650 : Number(k)) === range ? 'page' : undefined} class:list={['rounded-full px-3 py-1 text-xs font-semibold border', (k === 'all' ? 3650 : Number(k)) === range ? 'bg-ink text-white border-ink' : 'bg-white border-line text-ink-2']}>{l}</a>
+      ))}
+    </nav>
+  </div>
+  <div class="grid gap-6 lg:grid-cols-2">
+    <section class="card p-5" aria-labelledby="cat-h">
+      <div class="flex items-center"><h3 id="cat-h" class="font-bold">By category</h3><a href={csv('categories', `?range=${range}`)} class="ml-auto text-xs font-semibold text-brand" download>CSV</a></div>
+      <p class="text-xs text-ink-2 mb-4">Line-item revenue, {rangeLabel}</p>
+      {byCat.length ? <HBars label="Revenue by category" rows={byCat.map((c) => ({ label: c.name, value: c.revenue, display: money(c.revenue), sub: `${c.units} rented` }))} /> : <p class="text-sm text-ink-2">No bookings in this range.</p>}
+    </section>
+    <section class="card p-5" aria-labelledby="ch-h">
+      <div class="flex items-center"><h3 id="ch-h" class="font-bold">By marketing channel</h3><a href={csv('channels', `?range=${range}`)} class="ml-auto text-xs font-semibold text-brand" download>CSV</a></div>
+      <p class="text-xs text-ink-2 mb-4">Booking totals by attribution, {rangeLabel}</p>
+      {byChannel.length ? <HBars label="Revenue by channel" color="#C2410C" rows={byChannel.map((c) => ({ label: CHANNELS[c.channel] ?? c.channel, value: c.revenue, display: money(c.revenue), sub: `${c.n} booking${c.n === 1 ? '' : 's'}` }))} /> : <p class="text-sm text-ink-2">No bookings in this range.</p>}
+    </section>
+  </div>
+
+  <section id="utilization" class="card mt-6 overflow-hidden scroll-mt-20" aria-labelledby="ut-h">
+    <header class="flex flex-wrap items-center gap-2 px-5 py-4 border-b border-line">
+      <div><h2 id="ut-h" class="font-bold text-lg">Item utilization & ROI</h2><p class="text-xs text-ink-2">Utilization = unit-days booked ÷ units owned, last 90 days. ROI = (lifetime revenue − maintenance) ÷ purchase cost.</p></div>
+      <a href={csv('items')} class="ml-auto text-xs font-semibold text-brand" download>Download CSV</a>
+    </header>
+    <div class="overflow-x-auto">
+      <table class="table">
+        <thead><tr><th scope="col">Item</th><th scope="col" class="w-48">Utilization (90d)</th><th scope="col" class="text-right">Bookings</th><th scope="col" class="text-right">Revenue</th><th scope="col" class="text-right hidden md:table-cell">Maintenance</th><th scope="col" class="text-right">ROI</th></tr></thead>
+        <tbody>{perf.map((p) => (
+          <tr>
+            <td><a href={`/app/inventory/${p.id}`} class="font-medium hover:text-brand">{p.name}</a><span class="block text-xs text-ink-2">{p.quantity} unit{p.quantity === 1 ? '' : 's'}{p.kind === 'addon' ? ' · add-on' : ''}</span></td>
+            <td><div class="flex items-center gap-2"><div class="flex-1 h-2 rounded-full bg-canvas min-w-16" aria-hidden="true"><div class="h-full rounded-full bg-brand" style={`width:${Math.max(p.util, 1)}%`}></div></div><span class="text-xs tabular-nums w-9 text-right">{p.util}%</span></div></td>
+            <td class="text-right tabular-nums">{p.bookings}</td>
+            <td class="text-right tabular-nums font-semibold">{money(p.revenue)}</td>
+            <td class="text-right tabular-nums hidden md:table-cell text-ink-2">{money(p.maintenance)}</td>
+            <td class="text-right tabular-nums">{p.roi == null ? <a href={`/app/inventory/${p.id}`} class="text-xs text-ink-2 underline decoration-dotted" title="Add a purchase cost to calculate ROI">add cost</a> : <span class:list={['font-semibold', p.roi >= 100 ? 'text-green-700' : '']}>{p.roi}%</span>}</td>
+          </tr>
+        ))}</tbody>
+      </table>
+    </div>
+    {perf.some((p) => p.util === 0 && p.kind === 'rental') && <p class="px-5 py-3 text-xs text-ink-2 border-t border-line bg-canvas/50"><strong class="text-ink">Tip:</strong> units at 0% are great candidates for a package deal or a featured spot on your homepage.</p>}
+  </section>
+
+  <div class="grid gap-6 lg:grid-cols-[minmax(0,1fr)_380px] mt-6">
+    <section class="card overflow-hidden" aria-labelledby="tax-h">
+      <header class="flex flex-wrap items-center gap-2 px-5 py-4 border-b border-line">
+        <div><h2 id="tax-h" class="font-bold text-lg">Sales tax collected</h2><p class="text-xs text-ink-2">By event date · rate {((t.settings?.taxRateBps ?? 0) / 100).toFixed(2)}% · delivery treated as non-taxable</p></div>
+        <form method="get" class="ml-auto flex gap-2 items-center">
+          <input type="hidden" name="range" value={range === 3650 ? 'all' : String(range)} />
+          <label class="sr-only" for="year">Year</label>
+          <select id="year" name="year" class="input !min-h-9 w-24 text-xs">{[thisYear + 1, thisYear, thisYear - 1, thisYear - 2].map((y) => <option value={y} selected={y === year}>{y}</option>)}</select>
+          <label class="sr-only" for="period">Period</label>
+          <select id="period" name="period" class="input !min-h-9 w-28 text-xs"><option value="month" selected={period === 'month'}>Monthly</option><option value="quarter" selected={period === 'quarter'}>Quarterly</option></select>
+          <button class="btn-ghost !min-h-9 text-xs">Show</button>
+          <a href={csv('tax', `?year=${year}&period=${period}`)} class="btn-ghost !min-h-9 text-xs" download>CSV</a>
+        </form>
+      </header>
+      <div class="overflow-x-auto">
+        <table class="table">
+          <thead><tr><th scope="col">Period</th><th scope="col" class="text-right">Bookings</th><th scope="col" class="text-right">Gross sales</th><th scope="col" class="text-right">Taxable sales</th><th scope="col" class="text-right">Tax collected</th></tr></thead>
+          <tbody>
+            {tax.length === 0 ? <tr><td colspan="5" class="text-center text-ink-2 py-6">No taxable bookings in {year}.</td></tr> : tax.map((r) => (
+              <tr><td class="font-medium">{r.period}</td><td class="text-right tabular-nums">{r.n}</td><td class="text-right tabular-nums">{money(r.gross)}</td><td class="text-right tabular-nums">{money(r.taxable)}</td><td class="text-right tabular-nums font-semibold">{money(r.tax)}</td></tr>
+            ))}
+          </tbody>
+          {tax.length > 0 && <tfoot><tr class="font-bold"><td class="px-4 py-3">Total {year}</td><td></td><td class="px-4 py-3 text-right tabular-nums">{money(taxTotal.gross)}</td><td class="px-4 py-3 text-right tabular-nums">{money(taxTotal.taxable)}</td><td class="px-4 py-3 text-right tabular-nums">{money(taxTotal.tax)}</td></tr></tfoot>}
+        </table>
+      </div>
+    </section>
+
+    <section class="card p-5" aria-labelledby="bal-h">
+      <h2 id="bal-h" class="font-bold text-lg">Deposits vs balances</h2>
+      <p class="text-xs text-ink-2">Upcoming events (not yet ended)</p>
+      <dl class="mt-4 space-y-2 text-sm">
+        <div class="flex justify-between"><dt class="text-ink-2">Booked value</dt><dd class="tabular-nums font-semibold">{money(bal.upcoming_total)}</dd></div>
+        <div class="flex justify-between"><dt class="text-ink-2">Deposits required</dt><dd class="tabular-nums">{money(bal.upcoming_deposit)}</dd></div>
+        <div class="flex justify-between"><dt class="text-ink-2">Collected so far</dt><dd class="tabular-nums text-green-700 font-semibold">{money(bal.upcoming_paid)}</dd></div>
+        <div class="flex justify-between border-t border-line pt-2"><dt class="font-semibold">Balance to collect</dt><dd class="tabular-nums font-bold">{money(outstanding)}</dd></div>
+      </dl>
+      <div class="mt-3 h-3 rounded-full bg-canvas overflow-hidden flex" role="img" aria-label={`${bal.upcoming_total ? Math.round((bal.upcoming_paid / bal.upcoming_total) * 100) : 0}% of upcoming booked value collected`}>
+        <div class="h-full bg-mint" style={`width:${bal.upcoming_total ? (bal.upcoming_paid / bal.upcoming_total) * 100 : 0}%`}></div>
+      </div>
+      <ul class="mt-4 space-y-2 text-sm">
+        <li class:list={['rounded-xl px-3 py-2', bal.short_deposit_n ? 'bg-amber-50 text-amber-900' : 'bg-canvas text-ink-2']}>{bal.short_deposit_n} upcoming booking{bal.short_deposit_n === 1 ? '' : 's'} short of the required deposit</li>
+        <li class:list={['rounded-xl px-3 py-2', bal.overdue_n ? 'bg-red-50 text-red-800' : 'bg-canvas text-ink-2']}>{bal.overdue_n} past event{bal.overdue_n === 1 ? '' : 's'} with {money(bal.overdue_due)} still unpaid</li>
+      </ul>
+      <a href="/app/bookings?status=unpaid" class="btn-ghost w-full mt-4">Chase balances</a>
+    </section>
+  </div>
+</AppLayout>

@@ -1,0 +1,106 @@
+---
+/**
+ * Manual booking / phone-quote builder. Prefill via query params:
+ *   ?date=YYYY-MM-DD&start=11&end=17&zip=&name=&email=&phone=&items=<id>:<qty>,…&leadId=&notes=
+ */
+import { and, desc, eq } from 'drizzle-orm';
+import { z } from 'zod';
+import AppLayout from '../../../layouts/AppLayout.astro';
+import BookingBuilder, { type BuilderProps } from '../../../islands/ops/BookingBuilder';
+import { getDb, schema } from '../../../db/client';
+import { createBooking, BookingError } from '../../../lib/booking';
+import { formData, str, int, bool, flash, parse } from '../../../lib/forms';
+import { opsCtx, isUuid, isValidDay, addDays } from '../../../lib/ops/ctx';
+import { logActivity } from '../../../lib/ops/stats';
+import { money } from '../../../lib/pricing';
+
+const { t, today, settings, canManage } = opsCtx(Astro);
+if (!canManage) return Astro.redirect('/app/crew');
+const db = await getDb();
+const qp = Astro.url.searchParams;
+
+const [items, customers, cats] = await Promise.all([
+  db.select().from(schema.items).where(eq(schema.items.tenantId, t.id)).orderBy(schema.items.sort, schema.items.name),
+  db.select({ id: schema.customers.id, name: schema.customers.name, email: schema.customers.email, phone: schema.customers.phone })
+    .from(schema.customers).where(eq(schema.customers.tenantId, t.id)).orderBy(desc(schema.customers.createdAt)).limit(500),
+  db.select().from(schema.categories).where(eq(schema.categories.tenantId, t.id)),
+]);
+const catName = new Map(cats.map((c) => [c.id, c.name]));
+const itemIds = new Set(items.map((i) => i.id));
+
+const parseLines = (v: string) => v.split(',').map((x) => { const [id, n] = x.split(':'); return { itemId: id, qty: Math.max(1, Math.min(20, Number(n) || 1)) }; }).filter((l) => itemIds.has(l.itemId));
+
+let error = '';
+let prefill: BuilderProps['prefill'] = {
+  day: isValidDay(qp.get('date')) ? qp.get('date')! : addDays(today, 7),
+  startHour: Math.min(22, Math.max(6, Number(qp.get('start')) || settings.defaultStartHour || 10)),
+  endHour: Math.min(22, Math.max(6, Number(qp.get('end')) || settings.defaultEndHour || 18)),
+  zip: (qp.get('zip') ?? '').slice(0, 10),
+  lines: parseLines(qp.get('items') ?? ''),
+  customerId: isUuid(qp.get('customerId')) ? qp.get('customerId')! : undefined,
+  name: qp.get('name')?.slice(0, 120) ?? '', email: qp.get('email')?.slice(0, 200) ?? '', phone: qp.get('phone')?.slice(0, 40) ?? '',
+  city: qp.get('city')?.slice(0, 80) ?? t.city, state: qp.get('state')?.slice(0, 2) ?? t.state,
+  notes: qp.get('notes')?.slice(0, 2000) ?? '', leadId: isUuid(qp.get('leadId')) ? qp.get('leadId')! : undefined,
+  damageWaiver: settings.damageWaiverDefaultOn ?? false,
+};
+
+const f = await formData(Astro);
+if (f) {
+  let lines: { itemId: string; qty: number }[] = [];
+  try { lines = (JSON.parse(str(f, 'lines', 8000) || '[]') as { itemId: string; qty: number }[]).filter((l) => itemIds.has(l.itemId)).map((l) => ({ itemId: l.itemId, qty: Math.max(1, Math.min(50, Math.trunc(l.qty))) })); } catch { lines = []; }
+  const customerId = str(f, 'customerId', 40);
+  const leadId = str(f, 'leadId', 40);
+  const status = (['confirmed', 'pending', 'quote'] as const).find((s) => s === str(f, 'status', 12)) ?? 'confirmed';
+  prefill = {
+    day: str(f, 'day', 10), startHour: int(f, 'startHour', 10), endHour: int(f, 'endHour', 18), zip: str(f, 'zip', 10), lines,
+    customerId: customerId || undefined, name: str(f, 'name', 120), email: str(f, 'email', 200), phone: str(f, 'phone', 40),
+    address: str(f, 'address', 200), city: str(f, 'city', 80), state: str(f, 'state', 2).toUpperCase(), notes: str(f, 'notes', 2000),
+    leadId: leadId || undefined, eventType: str(f, 'eventType', 30), damageWaiver: bool(f, 'damageWaiver'), surface: str(f, 'surface', 40), status, coupon: str(f, 'coupon', 40),
+  };
+  const r = parse(z.object({
+    day: z.string().refine(isValidDay, 'Pick a valid date'),
+    startHour: z.number().int().min(0).max(23), endHour: z.number().int().min(0).max(24),
+    zip: z.string().min(3, 'ZIP is required'), address: z.string().min(3, 'Street address is required'),
+    lines: z.array(z.any()).min(1, 'Add at least one item'),
+  }), prefill);
+  let customer: { email: string; name: string; phone: string } | null = null;
+  if (customerId) {
+    const [c] = isUuid(customerId) ? await db.select().from(schema.customers).where(and(eq(schema.customers.tenantId, t.id), eq(schema.customers.id, customerId))).limit(1) : [];
+    if (c) customer = { email: c.email, name: c.name, phone: c.phone };
+  } else if (z.string().email().safeParse(prefill.email).success && prefill.name) {
+    customer = { email: prefill.email!, name: prefill.name!, phone: prefill.phone ?? '' };
+  }
+  if (!r.ok) error = Object.values(r.errors)[0];
+  else if (!customer) error = 'Pick an existing customer or enter a name and valid email.';
+  else {
+    try {
+      const { booking } = await createBooking(t, {
+        window: { day: prefill.day, startHour: prefill.startHour, endHour: prefill.endHour, overnight: bool(f, 'overnight') },
+        lines, zip: prefill.zip, surface: prefill.surface, damageWaiver: prefill.damageWaiver, couponCode: prefill.coupon || null,
+        customer, address: prefill.address!, city: prefill.city!, state: prefill.state!, eventType: prefill.eventType || 'birthday', notes: prefill.notes,
+        status, skipRules: true, source: 'phone', attribution: { channel: 'direct', utmSource: 'manual' },
+        leadId: isUuid(leadId) ? leadId : null,
+      });
+      if (isUuid(leadId)) {
+        await db.update(schema.leads).set({ stage: status === 'quote' ? 'quoted' : 'won' }).where(and(eq(schema.leads.id, leadId), eq(schema.leads.tenantId, t.id)));
+      }
+      await logActivity(t.id, 'booking', `Manual ${status === 'quote' ? 'quote' : 'booking'} #${booking.number} for ${customer.name} · ${money(booking.totalCents)}`, { bookingId: booking.id });
+      flash(Astro.cookies, `${status === 'quote' ? 'Quote' : 'Booking'} #${booking.number} created — ${money(booking.totalCents)}.`);
+      return Astro.redirect(`/app/bookings/${booking.id}`, 303);
+    } catch (e) {
+      error = e instanceof BookingError ? e.message : 'Something went wrong creating the booking.';
+      if (!(e instanceof BookingError)) console.error(e);
+    }
+  }
+}
+
+const props: BuilderProps = {
+  items: items.map((i) => ({ id: i.id, name: i.name, kind: i.kind, priceCents: i.priceCents, quantity: i.quantity, image: i.images[0], category: (i.categoryId && catName.get(i.categoryId)) || 'Rental', active: i.active })),
+  customers: customers.map((c) => ({ id: c.id, name: c.name, email: c.email, phone: c.phone })),
+  surfaces: settings.surfaces ?? [], hasWaiver: !!settings.damageWaiverBps, prefill, error,
+};
+---
+<AppLayout title="New booking" section="bookings" subtitle="Phone order or quote — live availability and pricing as you build it." wide>
+  <Fragment slot="actions"><a href="/app/bookings" class="btn-ghost">Cancel</a></Fragment>
+  <BookingBuilder client:load {...props} />
+</AppLayout>

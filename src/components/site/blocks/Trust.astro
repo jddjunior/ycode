@@ -1,0 +1,15 @@
+---
+import Icon from '../../Icon.astro';
+interface Props { props: Record<string, unknown> }
+const items = (Array.isArray(Astro.props.props.items) ? Astro.props.props.items : []) as { icon?: string; title?: string; text?: string }[];
+---
+<section class="s-wrap pt-16 md:pt-20" aria-label="Why families trust us">
+  <ul class="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
+    {items.slice(0, 8).map((it) => (
+      <li class="s-tile p-5 flex gap-4 items-start">
+        <span class="grid place-items-center size-12 shrink-0 rounded-[calc(var(--r-card)*.7)] bg-primary text-primary-ink"><Icon name={it.icon ?? 'sparkle'} size={22} /></span>
+        <span><span class="block font-display font-bold text-[1.05rem]">{it.title}</span><span class="block text-sm s-sub mt-1 leading-relaxed">{it.text}</span></span>
+      </li>
+    ))}
+  </ul>
+</section>

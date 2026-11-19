@@ -1,0 +1,113 @@
+---
+import { and, eq } from 'drizzle-orm';
+import { z } from 'zod';
+import AppLayout from '../../../../layouts/AppLayout.astro';
+import Icon from '../../../../components/Icon.astro';
+import { getDb, schema } from '../../../../db/client';
+import type { LocalFacts } from '../../../../db/schema';
+import { formData, str, list } from '../../../../lib/forms';
+import { generateCityIntro } from '../../../../lib/ai';
+import { siteOrigin } from '../../../../lib/tenant';
+import { pagePath } from '../../../../lib/growth/blockdefs';
+import { ctx, done } from '../../../../lib/growth/app';
+
+const { t, tenantId, canEdit } = ctx(Astro);
+const id = Astro.params.id ?? '';
+if (!z.uuid().safeParse(id).success) return Astro.redirect('/app/seo');
+const db = await getDb();
+const [page] = await db.select().from(schema.pages).where(and(eq(schema.pages.id, id), eq(schema.pages.tenantId, tenantId), eq(schema.pages.kind, 'city'))).limit(1);
+if (!page) return Astro.redirect('/app/seo');
+const local: LocalFacts = page.local ?? { city: page.title, state: t.state };
+
+const clip = (xs: string[], n = 20, len = 80) => [...new Set(xs.map((x) => x.slice(0, len)))].slice(0, n);
+const Facts = z.object({
+  city: z.string().min(2).max(60), state: z.string().regex(/^[A-Z]{2}$/, 'State must be 2 letters'),
+  zips: z.array(z.string().regex(/^\d{5}$/, 'ZIPs must be 5 digits')).max(40),
+  intro: z.string().max(1200), deliveryNote: z.string().max(300),
+  faqs: z.array(z.object({ q: z.string().min(3).max(200), a: z.string().min(3).max(1000) })).max(12),
+});
+
+const f = await formData(Astro);
+if (f) {
+  if (!canEdit) return done(Astro, 'View-only access.', undefined, 'error');
+  const action = str(f, '_action', 20);
+  if (action === 'intro') {
+    const intro = await generateCityIntro(t.name, local.city, local.state, { neighborhoods: local.neighborhoods, parks: local.parks });
+    await db.update(schema.pages).set({ local: { ...local, intro }, updatedAt: new Date() }).where(and(eq(schema.pages.id, id), eq(schema.pages.tenantId, tenantId)));
+    return done(Astro, 'Wrote a fresh intro using your local facts.');
+  }
+  const qs = f.getAll('faqQ').map(String), as = f.getAll('faqA').map(String);
+  const faqs = qs.map((q, i) => ({ q: q.trim(), a: (as[i] ?? '').trim() })).filter((x) => x.q || x.a);
+  const r = Facts.safeParse({
+    city: str(f, 'city', 60), state: str(f, 'state', 2).toUpperCase(), zips: clip(list(f, 'zips'), 40, 5),
+    intro: str(f, 'intro', 1200), deliveryNote: str(f, 'deliveryNote', 300), faqs,
+  });
+  if (!r.success) return done(Astro, `${r.error.issues[0].path.join(' ')}: ${r.error.issues[0].message}`, undefined, 'error');
+  const next: LocalFacts = {
+    ...local, ...r.data,
+    neighborhoods: clip(list(f, 'neighborhoods')), parks: clip(list(f, 'parks')), venues: clip(list(f, 'venues')),
+  };
+  await db.update(schema.pages).set({ local: next, updatedAt: new Date() }).where(and(eq(schema.pages.id, id), eq(schema.pages.tenantId, tenantId)));
+  return done(Astro, `Saved local facts for ${next.city}.`);
+}
+
+const origin = await siteOrigin(t);
+const faqRows = [...(local.faqs ?? []), ...Array.from({ length: Math.max(1, 6 - (local.faqs?.length ?? 0)) }, () => ({ q: '', a: '' }))].slice(0, 12);
+const n = (local.neighborhoods?.length ?? 0) + (local.parks?.length ?? 0) + (local.venues?.length ?? 0);
+---
+<AppLayout title={`Local facts: ${local.city}`} section="seo" subtitle="Real neighborhoods, parks and venues make this page genuinely useful — and different from every competitor’s template.">
+  <a slot="actions" href="/app/seo#generator" class="btn-ghost">← SEO</a>
+  <a slot="actions" href={origin + pagePath('city', page.slug)} target="_blank" rel="noopener" class="btn-ghost"><Icon name="external" size={16} />Preview</a>
+  <div class="grid gap-6 lg:grid-cols-[1fr_300px]">
+    <form method="post" class="card p-4 sm:p-6 space-y-5">
+      <div class="grid gap-3 sm:grid-cols-[1fr_96px_1fr]">
+        <div><label class="label" for="city">City</label><input class="input" id="city" name="city" value={local.city} required maxlength="60" /></div>
+        <div><label class="label" for="state">State</label><input class="input uppercase" id="state" name="state" value={local.state} maxlength="2" required /></div>
+        <div><label class="label" for="zips">ZIP codes</label><input class="input" id="zips" name="zips" value={(local.zips ?? []).join(', ')} placeholder="77494, 77450" /></div>
+      </div>
+      <div class="grid gap-3 sm:grid-cols-3">
+        <div><label class="label" for="neighborhoods">Neighborhoods</label><textarea class="input" id="neighborhoods" name="neighborhoods" rows="5" placeholder="One per line">{(local.neighborhoods ?? []).join('\n')}</textarea></div>
+        <div><label class="label" for="parks">Parks</label><textarea class="input" id="parks" name="parks" rows="5" placeholder="One per line">{(local.parks ?? []).join('\n')}</textarea></div>
+        <div><label class="label" for="venues">Venues, schools & churches</label><textarea class="input" id="venues" name="venues" rows="5" placeholder="One per line">{(local.venues ?? []).join('\n')}</textarea></div>
+      </div>
+      <div>
+        <div class="flex items-end gap-2"><label class="label" for="intro">Intro paragraph</label></div>
+        <textarea class="input" id="intro" name="intro" rows="5" maxlength="1200">{local.intro ?? ''}</textarea>
+        <p class="hint">70–110 words. Mention the neighborhoods you deliver to and anything specific (HOA rules, park permits, generator needs).</p>
+      </div>
+      <div><label class="label" for="deliveryNote">Delivery note</label><input class="input" id="deliveryNote" name="deliveryNote" value={local.deliveryNote ?? ''} maxlength="300" placeholder="Free delivery on orders over $250." /></div>
+      <fieldset class="space-y-3">
+        <legend class="label">Local FAQs</legend>
+        {faqRows.map((q, i) => (
+          <div class="grid gap-2 rounded-xl border border-line p-3">
+            <input class="input" name="faqQ" value={q.q} maxlength="200" aria-label={`Question ${i + 1}`} placeholder={`Question ${i + 1}`} />
+            <textarea class="input" name="faqA" rows="2" maxlength="1000" aria-label={`Answer ${i + 1}`} placeholder="Answer">{q.a}</textarea>
+          </div>
+        ))}
+      </fieldset>
+      {canEdit && <button class="btn-primary w-full sm:w-auto">Save local facts</button>}
+    </form>
+    <aside class="space-y-4">
+      <div class="card p-4">
+        <p class="kpi-label">Local detail</p>
+        <p class="kpi-value">{n}<span class="text-sm text-ink-2 font-medium"> facts</span></p>
+        <p class="hint">Aim for 4+ neighborhoods/parks/venues and 3+ FAQs per city.</p>
+      </div>
+      {canEdit && (
+        <form method="post" class="card p-4 space-y-2">
+          <input type="hidden" name="_action" value="intro" />
+          <p class="text-sm font-semibold">Rewrite the intro</p>
+          <p class="text-xs text-ink-2">Uses the neighborhoods and parks you saved. Review before publishing — never claim things that aren’t true.</p>
+          <button class="btn-ghost w-full"><Icon name="sparkle" size={16} />Generate intro</button>
+        </form>
+      )}
+      <div class="card p-4 text-xs text-ink-2 space-y-1.5">
+        <p class="font-semibold text-ink text-sm">Ideas worth adding</p>
+        <p>• Which parks allow inflatables and whether a permit or generator is needed.</p>
+        <p>• HOA or city rules on setup times and noise.</p>
+        <p>• Popular venues: community centers, churches, schools you’ve served.</p>
+        <p>• Typical yard sizes in older vs newer neighborhoods.</p>
+      </div>
+    </aside>
+  </div>
+</AppLayout>

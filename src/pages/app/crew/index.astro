@@ -1,0 +1,179 @@
+---
+/**
+ * Crew app: today's stops in route order with big buttons — navigate, call,
+ * per-stop checklist (stored in bookings.checklist), delivered / picked up,
+ * and cleaning logs (maintenance_logs kind 'cleaning').
+ */
+import { and, eq } from 'drizzle-orm';
+import CrewLayout from '../../../layouts/CrewLayout.astro';
+import Icon from '../../../components/Icon.astro';
+import WeatherBadge from '../../../components/ops/WeatherBadge.astro';
+import { getDb, schema } from '../../../db/client';
+import { formData, str, flash } from '../../../lib/forms';
+import { opsCtx, pickDay, dayTitle, shortDay, addDays, time, isUuid, fullAddress, mapsLink } from '../../../lib/ops/ctx';
+import { stopsForDay, routeStops, weatherFor, CHECKLIST } from '../../../lib/ops/stops';
+import { logActivity } from '../../../lib/ops/stats';
+
+const { t, s, tz, today, role, settings } = opsCtx(Astro);
+const db = await getDb();
+const day = pickDay(Astro.url.searchParams.get('day'), today);
+const scope = role === 'crew' && Astro.url.searchParams.get('all') !== '1' ? 'mine' : 'all';
+const base = `/app/crew?day=${day}${scope === 'all' && role === 'crew' ? '&all=1' : ''}`;
+
+const f = await formData(Astro);
+if (f) {
+  const id = str(f, 'bookingId', 40);
+  const action = str(f, '_action', 20);
+  const [b] = isUuid(id) ? await db.select().from(schema.bookings).where(and(eq(schema.bookings.id, id), eq(schema.bookings.tenantId, t.id))).limit(1) : [];
+  if (!b) return new Response('Not found', { status: 404 });
+  if (role === 'crew' && b.crewUserId && b.crewUserId !== s.user.id) {
+    flash(Astro.cookies, 'That stop is assigned to someone else.', 'error');
+    return Astro.redirect(base, 303);
+  }
+  const where = and(eq(schema.bookings.id, b.id), eq(schema.bookings.tenantId, t.id));
+  const who = s.user.name || 'Crew';
+  if (action === 'check') {
+    const key = CHECKLIST.find((c) => c.key === str(f, 'key', 20))?.key;
+    if (key) await db.update(schema.bookings).set({ checklist: { ...(b.checklist ?? {}), [key]: !b.checklist?.[key] }, updatedAt: new Date() }).where(where);
+  } else if (action === 'delivered') {
+    await db.update(schema.bookings).set({ deliveredAt: b.deliveredAt ? null : new Date(), crewUserId: b.crewUserId ?? s.user.id, updatedAt: new Date() }).where(where);
+    if (!b.deliveredAt) { await logActivity(t.id, 'delivery', `${who} delivered booking #${b.number}`, { bookingId: b.id }); flash(Astro.cookies, `#${b.number} delivered. Nice work!`); }
+  } else if (action === 'picked') {
+    await db.update(schema.bookings).set({
+      pickedUpAt: b.pickedUpAt ? null : new Date(), updatedAt: new Date(),
+      ...(!b.pickedUpAt && b.deliveredAt && ['pending', 'confirmed'].includes(b.status) && b.endsAt <= new Date(Date.now() + 6 * 3_600_000) ? { status: 'completed' as const } : {}),
+    }).where(where);
+    if (!b.pickedUpAt) { await logActivity(t.id, 'delivery', `${who} picked up booking #${b.number}`, { bookingId: b.id }); flash(Astro.cookies, `#${b.number} picked up. Don’t forget to log cleaning!`); }
+  } else if (action === 'clean') {
+    const lines = await db.select({ itemId: schema.bookingLines.itemId, qty: schema.bookingLines.qty, name: schema.bookingLines.name, kind: schema.items.kind, bundle: schema.items.bundle })
+      .from(schema.bookingLines).innerJoin(schema.items, eq(schema.items.id, schema.bookingLines.itemId))
+      .where(and(eq(schema.bookingLines.tenantId, t.id), eq(schema.bookingLines.bookingId, b.id)));
+    const units = new Map<string, number>();
+    for (const l of lines) {
+      if (l.kind === 'package') for (const c of l.bundle) units.set(c.itemId, (units.get(c.itemId) ?? 0) + c.qty * l.qty);
+      else units.set(l.itemId, (units.get(l.itemId) ?? 0) + l.qty);
+    }
+    if (units.size) await db.insert(schema.maintenanceLogs).values([...units].map(([itemId, n]) => ({ tenantId: t.id, itemId, kind: 'cleaning' as const, note: `Cleaned after booking #${b.number} by ${who}`, unitsAffected: n })));
+    await db.update(schema.bookings).set({ checklist: { ...(b.checklist ?? {}), cleaned: true }, updatedAt: new Date() }).where(where);
+    flash(Astro.cookies, `Cleaning logged for ${units.size} item${units.size === 1 ? '' : 's'}.`);
+  }
+  return Astro.redirect(`${base}#stop-${b.id}-${action === 'picked' || action === 'clean' ? 'p' : 'd'}`, 303);
+}
+
+const all = await stopsForDay(t, day);
+const mine = scope === 'mine' ? all.filter((x) => !x.booking.crewUserId || x.booking.crewUserId === s.user.id) : all;
+const route = routeStops(t, mine);
+const wx = (await weatherFor(t, [day]))[day];
+const left = route.ordered.filter((x) => !x.done).length;
+const nextStop = route.ordered.find((x) => !x.done);
+---
+<CrewLayout title={day === today ? 'Today’s stops' : day === addDays(today, 1) ? 'Tomorrow’s stops' : `Stops · ${shortDay(day)}`} subtitle={`${shortDay(day)} · ${route.ordered.length} stops · ${left} to go`}>
+  <nav class="flex items-center gap-2" aria-label="Day">
+    <a href={`/app/crew?day=${addDays(day, -1)}`} class="btn-ghost px-3" aria-label="Previous day"><Icon name="arrow" class="rotate-180" size={18} /></a>
+    <a href="/app/crew" class:list={['btn-ghost flex-1', day === today && '!bg-brand-soft !text-brand !border-brand/30']}>Today</a>
+    <a href={`/app/crew?day=${addDays(today, 1)}`} class:list={['btn-ghost flex-1', day === addDays(today, 1) && '!bg-brand-soft !text-brand !border-brand/30']}>Tomorrow</a>
+    <a href={`/app/crew?day=${addDays(day, 1)}`} class="btn-ghost px-3" aria-label="Next day"><Icon name="arrow" size={18} /></a>
+  </nav>
+
+  <div class:list={['mt-4 rounded-2xl p-4 flex items-center gap-3', wx?.level === 'stop' ? 'bg-red-600 text-white' : 'bg-white border border-line']}>
+    <Icon name="cloud" size={22} />
+    <div class="flex-1 text-sm">
+      {wx?.level === 'stop' ? <p class="font-bold">STOP — winds over {settings.windLimitMph ?? 15} mph. Don’t inflate outdoors. Call the office.</p>
+        : <p><span class="font-semibold">Wind limit {settings.windLimitMph ?? 15} mph.</span> Deflate and clear riders if gusts pick up.</p>}
+    </div>
+    {wx?.level !== 'stop' && <WeatherBadge risk={wx} compact />}
+  </div>
+
+  {role === 'crew' && (
+    <div class="mt-3 inline-flex rounded-xl border border-line bg-white p-1 w-full" role="group" aria-label="Which stops">
+      <a href={`/app/crew?day=${day}`} class:list={['flex-1 text-center py-2 rounded-lg text-sm font-semibold', scope === 'mine' ? 'bg-brand-soft text-brand' : 'text-ink-2']}>My stops</a>
+      <a href={`/app/crew?day=${day}&all=1`} class:list={['flex-1 text-center py-2 rounded-lg text-sm font-semibold', scope === 'all' ? 'bg-brand-soft text-brand' : 'text-ink-2']}>All stops</a>
+    </div>
+  )}
+
+  {route.ordered.length > 0 && route.runs.some((r) => r.mapsUrl) && (
+    <div class="grid gap-2 mt-4">
+      {route.runs.filter((r) => r.mapsUrl).map((r) => (
+        <a href={r.mapsUrl} target="_blank" rel="noopener" class="btn-primary w-full !min-h-14 text-base"><Icon name="map" />Start {r.label.toLowerCase()} in Maps</a>
+      ))}
+    </div>
+  )}
+
+  {route.ordered.length === 0 ? (
+    <div class="card p-8 text-center mt-6">
+      <span class="mx-auto grid place-items-center size-14 rounded-2xl bg-green-100 text-green-700"><Icon name="check" size={28} /></span>
+      <h2 class="font-bold text-lg mt-3">No stops {scope === 'mine' ? 'assigned to you ' : ''}{day === today ? 'today' : 'this day'}</h2>
+      <p class="text-sm text-ink-2 mt-1">Check tomorrow, or ask the office for your route.</p>
+    </div>
+  ) : (
+    <ol class="mt-5 space-y-4">
+      {route.ordered.map((x) => {
+        const isNext = nextStop?.key === x.key;
+        const ck = x.booking.checklist ?? {};
+        const nChecked = CHECKLIST.filter((c) => ck[c.key]).length;
+        return (
+          <li id={`stop-${x.booking.id}-${x.kind === 'dropoff' ? 'd' : 'p'}`} class:list={['card overflow-hidden scroll-mt-20', isNext && 'ring-2 ring-brand', x.done && 'opacity-80']}>
+            <div class:list={['px-4 py-3 flex items-center gap-3', x.kind === 'dropoff' ? 'bg-brand-soft' : 'bg-pop/15']}>
+              <span class:list={['grid place-items-center size-10 rounded-full font-extrabold text-lg shrink-0', x.done ? 'bg-mint text-white' : x.kind === 'dropoff' ? 'bg-brand text-white' : 'bg-pop text-[#1B1F4A]']}>{x.done ? <Icon name="check" /> : x.seq}</span>
+              <div class="min-w-0 flex-1">
+                <p class="text-xs font-bold uppercase tracking-wide">{x.kind === 'dropoff' ? 'Drop-off' : 'Pickup'}{isNext && ' · Next up'}</p>
+                <p class="text-sm font-semibold">{x.kind === 'dropoff' ? `Set up by ${time(x.booking.startsAt, tz)}` : `After ${time(x.booking.endsAt, tz)}`}</p>
+              </div>
+              <span class="text-xs font-semibold text-ink-2">#{x.booking.number}</span>
+            </div>
+            <div class="p-4">
+              <p class="text-lg font-bold">{x.customer?.name || 'Customer'}</p>
+              <p class="text-ink-2">{fullAddress(x.booking)}</p>
+              <ul class="mt-2 text-sm space-y-0.5">
+                {x.lines.map((l) => <li class="flex items-center gap-2"><Icon name="box" size={14} class="text-ink-2" />{l.qty > 1 ? `${l.qty}× ` : ''}{l.name}{l.isWet && <span class="chip bg-sky-100 text-sky-800">Wet</span>}</li>)}
+              </ul>
+              {x.booking.notes && <p class="mt-3 rounded-xl bg-sun/25 px-3 py-2 text-sm"><strong>Note:</strong> {x.booking.notes}</p>}
+              <div class="grid grid-cols-2 gap-2 mt-4">
+                <a href={mapsLink(x.booking)} target="_blank" rel="noopener" class="btn-primary !min-h-14 text-base"><Icon name="map" />Navigate</a>
+                {x.customer?.phone ? <a href={`tel:${x.customer.phone}`} class="btn-ghost !min-h-14 text-base"><Icon name="phone" />Call</a> : <span class="btn-ghost !min-h-14 opacity-50" aria-disabled="true">No phone</span>}
+              </div>
+
+              {x.kind === 'dropoff' ? (
+                <>
+                  <h3 class="mt-5 text-sm font-bold flex items-center">Setup checklist <span class="ml-auto text-xs font-semibold text-ink-2 tabular-nums">{nChecked}/{CHECKLIST.length}</span></h3>
+                  <div class="grid gap-2 mt-2">
+                    {CHECKLIST.map((c) => (
+                      <form method="post">
+                        <input type="hidden" name="_action" value="check" /><input type="hidden" name="bookingId" value={x.booking.id} /><input type="hidden" name="key" value={c.key} />
+                        <button aria-pressed={ck[c.key] ? 'true' : 'false'} class:list={['w-full flex items-center gap-3 rounded-xl border-2 px-4 min-h-14 text-left font-semibold cursor-pointer transition-colors', ck[c.key] ? 'border-mint bg-green-50 text-green-800' : 'border-line bg-white hover:border-brand/40']}>
+                          <span class:list={['grid place-items-center size-7 rounded-lg border-2 shrink-0', ck[c.key] ? 'bg-mint border-mint text-white' : 'border-ink-2/40']}>{ck[c.key] && <Icon name="check" size={16} />}</span>
+                          {c.label}
+                        </button>
+                      </form>
+                    ))}
+                  </div>
+                  <form method="post" class="mt-3">
+                    <input type="hidden" name="_action" value="delivered" /><input type="hidden" name="bookingId" value={x.booking.id} />
+                    <button class:list={['w-full !min-h-16 text-lg', x.booking.deliveredAt ? 'btn-ghost' : 'btn-pop']}>
+                      <Icon name={x.booking.deliveredAt ? 'check' : 'truck'} size={22} />{x.booking.deliveredAt ? `Delivered ${time(x.booking.deliveredAt, tz)} · undo` : nChecked < CHECKLIST.length ? `Mark delivered (${CHECKLIST.length - nChecked} checks left)` : 'Mark delivered'}
+                    </button>
+                  </form>
+                </>
+              ) : (
+                <div class="grid gap-2 mt-4">
+                  <form method="post">
+                    <input type="hidden" name="_action" value="picked" /><input type="hidden" name="bookingId" value={x.booking.id} />
+                    <button class:list={['w-full !min-h-16 text-lg', x.booking.pickedUpAt ? 'btn-ghost' : 'btn-pop']}>
+                      <Icon name={x.booking.pickedUpAt ? 'check' : 'box'} size={22} />{x.booking.pickedUpAt ? `Picked up ${time(x.booking.pickedUpAt, tz)} · undo` : 'Mark picked up'}
+                    </button>
+                  </form>
+                  <form method="post">
+                    <input type="hidden" name="_action" value="clean" /><input type="hidden" name="bookingId" value={x.booking.id} />
+                    <button class:list={['w-full !min-h-14 text-base', ck.cleaned ? 'btn-ghost !border-mint !bg-green-50 !text-green-800' : 'btn-ghost']}>
+                      <Icon name={ck.cleaned ? 'check' : 'sparkle'} />{ck.cleaned ? 'Cleaning logged — log again' : 'Log cleaning'}
+                    </button>
+                  </form>
+                </div>
+              )}
+            </div>
+          </li>
+        );
+      })}
+    </ol>
+  )}
+</CrewLayout>

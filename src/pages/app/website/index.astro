@@ -1,0 +1,155 @@
+---
+import { and, asc, eq, sql } from 'drizzle-orm';
+import { z } from 'zod';
+import AppLayout from '../../../layouts/AppLayout.astro';
+import Icon from '../../../components/Icon.astro';
+import Tabs from './_Tabs.astro';
+import { getDb, schema } from '../../../db/client';
+import type { Block } from '../../../db/schema';
+import { formData, str, parse } from '../../../lib/forms';
+import { slugify, token } from '../../../lib/util';
+import { siteOrigin } from '../../../lib/tenant';
+import { cityBlocks, cityFacts } from '../../../lib/provision';
+import { PLANS } from '../../../lib/plans';
+import { pagePath, defFor } from '../../../lib/growth/blockdefs';
+import { ctx, done, fmtDay } from '../../../lib/growth/app';
+
+const { t, tenantId, canEdit } = ctx(Astro);
+const db = await getDb();
+type Kind = 'page' | 'city' | 'post' | 'landing';
+const KINDS: Kind[] = ['page', 'city', 'post', 'landing'];
+const kindFilter = (KINDS as string[]).includes(Astro.url.searchParams.get('kind') ?? '') ? (Astro.url.searchParams.get('kind') as Kind) : null;
+
+const mk = (type: string, props?: Record<string, unknown>): Block => ({ id: token(6), type, props: props ?? structuredClone(defFor(type)!.defaults) });
+function starterBlocks(kind: Kind, title: string): Block[] {
+  if (kind === 'post') return [mk('richtext', { markdown: `## ${title}\n\nStart writing. Helpful, local posts (park permit rules, how much space a water slide needs, party themes) earn links and rankings.` }), mk('cta')];
+  if (kind === 'landing') return [mk('hero', { ...defFor('hero')!.defaults, headline: title, eyebrow: 'Limited dates' }), mk('featured'), mk('reviews'), mk('cta')];
+  return [mk('hero', { ...defFor('hero')!.defaults, headline: title }), mk('richtext'), mk('cta')];
+}
+
+const Create = z.object({ kind: z.enum(KINDS), title: z.string().min(3, 'Title is too short').max(120), slug: z.string().max(60) });
+const f = await formData(Astro);
+if (f) {
+  if (!canEdit) return done(Astro, 'Only owners and managers can edit the website.', undefined, 'error');
+  const action = str(f, '_action', 20);
+  if (action === 'create') {
+    const r = parse(Create, { kind: str(f, 'kind', 20), title: str(f, 'title', 120), slug: str(f, 'slug', 60) });
+    if (!r.ok) return done(Astro, Object.values(r.errors)[0], undefined, 'error');
+    const { kind, title } = r.data;
+    const slug = slugify(r.data.slug || title);
+    if (kind === 'city') {
+      const limit = PLANS[t.plan].limits.cityPages;
+      const [{ n }] = await db.select({ n: sql<number>`count(*)::int` }).from(schema.pages).where(and(eq(schema.pages.tenantId, tenantId), eq(schema.pages.kind, 'city')));
+      if (limit != null && n >= limit) return done(Astro, `Your ${PLANS[t.plan].name} plan includes ${limit} city pages. Upgrade for more.`, undefined, 'error');
+    }
+    const [dupe] = await db.select({ id: schema.pages.id }).from(schema.pages).where(and(eq(schema.pages.tenantId, tenantId), eq(schema.pages.kind, kind), eq(schema.pages.slug, slug))).limit(1);
+    if (dupe) return done(Astro, `A ${kind} with the URL “${slug}” already exists.`, undefined, 'error');
+    const city = title.replace(/^.*\bin\s+/i, '').replace(/,.*$/, '').trim() || title;
+    const [row] = await db.insert(schema.pages).values({
+      tenantId, kind, slug, title, status: 'draft', publishedAt: null,
+      blocks: kind === 'city' ? cityBlocks(city) : starterBlocks(kind, title),
+      local: kind === 'city' ? cityFacts(city, t.state) : null,
+    }).returning({ id: schema.pages.id });
+    return done(Astro, `Created “${title}” as a draft. Add content, then publish.`, `/app/website/pages/${row.id}`);
+  }
+  const id = str(f, 'id', 40);
+  if (!z.uuid().safeParse(id).success) return done(Astro, 'Unknown page.', undefined, 'error');
+  const [page] = await db.select().from(schema.pages).where(and(eq(schema.pages.id, id), eq(schema.pages.tenantId, tenantId))).limit(1);
+  if (!page) return done(Astro, 'Unknown page.', undefined, 'error');
+  const isHome = page.kind === 'page' && page.slug === '';
+  if (action === 'publish') {
+    await db.update(schema.pages).set({ status: 'published', publishedAt: page.publishedAt ?? new Date(), updatedAt: new Date() }).where(and(eq(schema.pages.id, id), eq(schema.pages.tenantId, tenantId)));
+    return done(Astro, `“${page.title}” is live.`);
+  }
+  if (action === 'unpublish') {
+    if (isHome) return done(Astro, 'Your homepage is always published.', undefined, 'error');
+    await db.update(schema.pages).set({ status: 'draft', updatedAt: new Date() }).where(and(eq(schema.pages.id, id), eq(schema.pages.tenantId, tenantId)));
+    return done(Astro, `“${page.title}” is now a draft (hidden from your site).`);
+  }
+  if (action === 'delete') {
+    if (isHome) return done(Astro, 'Your homepage can’t be deleted.', undefined, 'error');
+    await db.delete(schema.pages).where(and(eq(schema.pages.id, id), eq(schema.pages.tenantId, tenantId)));
+    return done(Astro, `Deleted “${page.title}”. Add a redirect in SEO → Migration if it had traffic.`);
+  }
+  return done(Astro, 'Unknown action.', undefined, 'error');
+}
+
+const where = kindFilter ? and(eq(schema.pages.tenantId, tenantId), eq(schema.pages.kind, kindFilter)) : eq(schema.pages.tenantId, tenantId);
+const pages = await db.select({ id: schema.pages.id, slug: schema.pages.slug, kind: schema.pages.kind, title: schema.pages.title, status: schema.pages.status, updatedAt: schema.pages.updatedAt, n: sql<number>`jsonb_array_length(${schema.pages.blocks})::int` })
+  .from(schema.pages).where(where).orderBy(asc(schema.pages.kind), asc(schema.pages.slug));
+const origin = await siteOrigin(t);
+const counts = Object.fromEntries(KINDS.map((k) => [k, 0]));
+for (const p of await db.select({ kind: schema.pages.kind }).from(schema.pages).where(eq(schema.pages.tenantId, tenantId))) counts[p.kind]++;
+const cityLimit = PLANS[t.plan].limits.cityPages;
+const KIND_LABEL: Record<Kind, string> = { page: 'Page', city: 'City page', post: 'Blog post', landing: 'Landing page' };
+---
+<AppLayout title="Website" section="website" subtitle="Your SEO storefront. You own the domain, the content and the rankings.">
+  <a slot="actions" href={origin + '/'} target="_blank" rel="noopener" class="btn-ghost"><Icon name="external" size={16} />View site</a>
+  <Tabs active={kindFilter === 'post' ? 'posts' : 'pages'} />
+
+  <div class="grid gap-3 grid-cols-2 lg:grid-cols-4 mb-6">
+    <div class="kpi"><p class="kpi-label">Pages</p><p class="kpi-value">{counts.page}</p></div>
+    <div class="kpi"><p class="kpi-label">City pages</p><p class="kpi-value">{counts.city}<span class="text-sm text-ink-2 font-medium"> / {cityLimit ?? '∞'}</span></p></div>
+    <div class="kpi"><p class="kpi-label">Blog posts</p><p class="kpi-value">{counts.post}</p></div>
+    <div class="kpi"><p class="kpi-label">Landing pages</p><p class="kpi-value">{counts.landing}</p></div>
+  </div>
+
+  <div class="grid gap-6 lg:grid-cols-[1fr_320px]">
+    <section class="card overflow-hidden" aria-labelledby="pages-h">
+      <div class="flex flex-wrap items-center gap-2 px-4 py-3 border-b border-line">
+        <h2 id="pages-h" class="font-bold">{kindFilter ? KIND_LABEL[kindFilter] + 's' : 'All pages'}</h2>
+        <div class="ml-auto flex flex-wrap gap-1 text-xs">
+          <a href="/app/website" class:list={['chip', !kindFilter ? 'bg-ink text-white' : 'bg-canvas text-ink-2']}>All</a>
+          {KINDS.map((k) => <a href={`/app/website?kind=${k}`} class:list={['chip', kindFilter === k ? 'bg-ink text-white' : 'bg-canvas text-ink-2']}>{KIND_LABEL[k]}s</a>)}
+        </div>
+      </div>
+      {pages.length === 0 ? <p class="p-6 text-sm text-ink-2">Nothing here yet — create one on the right.</p> : (
+        <ul class="divide-y divide-line">
+          {pages.map((p) => {
+            const path = pagePath(p.kind, p.slug);
+            const isHome = p.kind === 'page' && p.slug === '';
+            return (
+              <li class="flex flex-wrap items-center gap-3 px-4 py-3">
+                <div class="min-w-0 flex-1 basis-56">
+                  <a href={`/app/website/pages/${p.id}`} class="font-semibold hover:text-brand block truncate">{p.title}</a>
+                  <p class="text-xs text-ink-2 truncate"><span class="chip bg-canvas text-ink-2 mr-1">{KIND_LABEL[p.kind]}</span>{path} · {p.n} blocks · updated {fmtDay(p.updatedAt, t.timezone)}</p>
+                </div>
+                <span class:list={['chip', p.status === 'published' ? 'bg-green-50 text-green-800' : 'bg-sun/30 text-[#7A5200]']}>{p.status === 'published' ? 'Live' : 'Draft'}</span>
+                <div class="flex flex-wrap gap-1.5">
+                  <a class="btn-ghost min-h-9 px-3 text-xs" href={`/app/website/pages/${p.id}`}>Edit</a>
+                  <a class="btn-ghost min-h-9 px-3 text-xs" href={origin + path} target="_blank" rel="noopener">Preview</a>
+                  {canEdit && (p.status === 'draft'
+                    ? <form method="post"><input type="hidden" name="_action" value="publish" /><input type="hidden" name="id" value={p.id} /><button class="btn-primary min-h-9 px-3 text-xs">Publish</button></form>
+                    : !isHome && <form method="post"><input type="hidden" name="_action" value="unpublish" /><input type="hidden" name="id" value={p.id} /><button class="btn-ghost min-h-9 px-3 text-xs">Unpublish</button></form>)}
+                  {canEdit && !isHome && <form method="post" onsubmit="return confirm('Delete this page? This cannot be undone.')"><input type="hidden" name="_action" value="delete" /><input type="hidden" name="id" value={p.id} /><button class="btn-danger min-h-9 px-3 text-xs" aria-label={`Delete ${p.title}`}>Delete</button></form>}
+                </div>
+              </li>
+            );
+          })}
+        </ul>
+      )}
+    </section>
+
+    <aside class="space-y-4">
+      {canEdit && (
+        <form method="post" class="card p-4 space-y-3">
+          <h2 class="font-bold">New page</h2>
+          <input type="hidden" name="_action" value="create" />
+          <div><label class="label" for="kind">Type</label>
+            <select class="input" id="kind" name="kind">{KINDS.map((k) => <option value={k} selected={(kindFilter ?? 'page') === k}>{KIND_LABEL[k]}</option>)}</select></div>
+          <div><label class="label" for="title">Title</label><input class="input" id="title" name="title" required minlength="3" maxlength="120" placeholder="e.g. Water Slide Rentals in Katy" /></div>
+          <div><label class="label" for="slug">URL slug <span class="font-normal text-ink-2">(optional)</span></label><input class="input" id="slug" name="slug" maxlength="60" pattern="[a-z0-9-]*" placeholder="water-slide-rentals-katy" /><p class="hint">Lowercase letters, numbers and dashes.</p></div>
+          <button class="btn-primary w-full"><Icon name="plus" size={16} />Create draft</button>
+        </form>
+      )}
+      <div class="card p-4 text-sm space-y-2">
+        <h2 class="font-bold">Tips that win local search</h2>
+        <ul class="space-y-1.5 text-ink-2">
+          <li class="flex gap-2"><Icon name="check" size={16} class="text-mint shrink-0 mt-0.5" />Use the <a class="text-brand font-semibold" href="/app/seo#generator">city page generator</a> for each town you deliver to — then add real neighborhoods and parks.</li>
+          <li class="flex gap-2"><Icon name="check" size={16} class="text-mint shrink-0 mt-0.5" />Blog about local logistics: park permits, generators, setup space.</li>
+          <li class="flex gap-2"><Icon name="check" size={16} class="text-mint shrink-0 mt-0.5" />Landing pages are for ads — one offer, one city, one button.</li>
+        </ul>
+      </div>
+    </aside>
+  </div>
+</AppLayout>

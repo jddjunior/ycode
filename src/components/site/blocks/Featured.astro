@@ -1,0 +1,23 @@
+---
+import type { SiteCtx, Item } from '../../../lib/site/data';
+import ProductCard from '../ProductCard.astro';
+interface Props { ctx: SiteCtx; props: Record<string, unknown> }
+const { ctx, props: p } = Astro.props;
+const limit = Math.min(12, Math.max(3, Number(p.limit ?? 8)));
+const pool = ctx.items.filter((i) => i.kind === 'rental');
+const items: Item[] = [...pool.filter((i) => i.featured), ...pool.filter((i) => !i.featured)].slice(0, limit);
+---
+{items.length > 0 && (
+<section class="s-wrap s-section !pt-4">
+  <div class="flex flex-wrap items-end justify-between gap-4">
+    <div>
+      <h2 class="s-h2">{String(p.title ?? 'Popular this weekend')}</h2>
+      <p class="s-sub mt-2 font-semibold">Prices include delivery, setup and pickup. Pick a date to see what’s open.</p>
+    </div>
+    <a href={ctx.href('/rentals#check')} class="s-btn s-btn-ghost">Check your date</a>
+  </div>
+  <div class="mt-8 grid grid-cols-1 min-[480px]:grid-cols-2 lg:grid-cols-4 gap-4 sm:gap-5">
+    {items.map((it) => <ProductCard ctx={ctx} item={it} />)}
+  </div>
+</section>
+)}

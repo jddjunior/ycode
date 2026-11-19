@@ -1,0 +1,14 @@
+---
+/** Horizontal bar list (HTML/CSS) — readable labels, direct values, single hue. */
+interface Props { rows: { label: string; value: number; display: string; sub?: string }[]; color?: string; label: string }
+const { rows, color = '#5B3CF5', label } = Astro.props;
+const max = Math.max(1, ...rows.map((r) => r.value));
+---
+<ul class="space-y-3" aria-label={label}>
+  {rows.map((r) => (
+    <li>
+      <div class="flex items-baseline gap-2 text-sm"><span class="font-medium truncate">{r.label}</span>{r.sub && <span class="text-xs text-ink-2">{r.sub}</span>}<span class="ml-auto font-semibold tabular-nums">{r.display}</span></div>
+      <div class="mt-1 h-2.5 rounded-full bg-canvas" aria-hidden="true"><div class="h-full rounded-full" style={`width:${Math.max(1.5, (r.value / max) * 100)}%;background:${color}`}></div></div>
+    </li>
+  ))}
+</ul>

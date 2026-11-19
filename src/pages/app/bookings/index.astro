@@ -1,0 +1,185 @@
+---
+/** Bookings: filterable list + month calendar (?view=calendar&month=YYYY-MM). */
+import { and, desc, asc, eq, gte, lt, sql, inArray, or, ilike, type SQL } from 'drizzle-orm';
+import AppLayout from '../../../layouts/AppLayout.astro';
+import Icon from '../../../components/Icon.astro';
+import StatusChip from '../../../components/ops/StatusChip.astro';
+import { getDb, schema } from '../../../db/client';
+import { money } from '../../../lib/pricing';
+import { opsCtx, dayBounds, monthBounds, isValidDay, localDay, addDays, time, STATUS, dayTitle } from '../../../lib/ops/ctx';
+
+const { t, tz, today } = opsCtx(Astro);
+const db = await getDb();
+const q = Astro.url.searchParams;
+const view = q.get('view') === 'calendar' ? 'calendar' : 'list';
+const status = q.get('status') ?? 'upcoming';
+const search = (q.get('q') ?? '').trim().slice(0, 80);
+const fromDay = isValidDay(q.get('from')) ? q.get('from')! : '';
+const toDay = isValidDay(q.get('to')) ? q.get('to')! : '';
+
+const B = schema.bookings, C = schema.customers;
+const live = sql`(${B.status} <> 'hold' or ${B.holdExpiresAt} > now())`;
+const conds: SQL[] = [eq(B.tenantId, t.id), live];
+
+let rows: { b: typeof B.$inferSelect; c: typeof C.$inferSelect | null }[] = [];
+let month = monthBounds(today, tz);
+let monthParam = today.slice(0, 7);
+if (view === 'calendar') {
+  const mp = q.get('month');
+  if (mp && /^\d{4}-\d{2}$/.test(mp)) monthParam = mp;
+  month = monthBounds(monthParam + '-01', tz);
+  rows = await db.select({ b: B, c: C }).from(B).leftJoin(C, eq(C.id, B.customerId))
+    .where(and(...conds, sql`${B.status} <> 'canceled'`, gte(B.startsAt, month.from), lt(B.startsAt, month.to))).orderBy(asc(B.startsAt));
+} else {
+  if (status === 'upcoming') conds.push(gte(B.endsAt, dayBounds(today, tz).from), inArray(B.status, ['hold', 'quote', 'pending', 'confirmed']));
+  else if (status === 'unpaid') conds.push(inArray(B.status, ['pending', 'confirmed', 'completed']), sql`${B.totalCents} > ${B.paidCents}`);
+  else if (status in STATUS) conds.push(eq(B.status, status as typeof B.$inferSelect['status']));
+  if (fromDay) conds.push(gte(B.startsAt, dayBounds(fromDay, tz).from));
+  if (toDay) conds.push(lt(B.startsAt, dayBounds(toDay, tz).to));
+  if (search) {
+    const like = `%${search.replace(/[%_\\]/g, '\\$&')}%`;
+    const n = /^#?\d+$/.test(search) ? Number(search.replace('#', '')) : null;
+    conds.push(or(ilike(C.name, like), ilike(C.email, like), ilike(C.phone, like), ilike(B.city, like), ilike(B.address, like), ...(n != null ? [eq(B.number, n)] : []))!);
+  }
+  const order = status === 'upcoming' ? asc(B.startsAt) : desc(B.startsAt);
+  rows = await db.select({ b: B, c: C }).from(B).leftJoin(C, eq(C.id, B.customerId)).where(and(...conds)).orderBy(order).limit(200);
+}
+
+const lineRows = rows.length ? await db.select({ bookingId: schema.bookingLines.bookingId, name: schema.bookingLines.name, qty: schema.bookingLines.qty })
+  .from(schema.bookingLines).where(and(eq(schema.bookingLines.tenantId, t.id), inArray(schema.bookingLines.bookingId, rows.map((r) => r.b.id)))) : [];
+const linesOf = (id: string) => lineRows.filter((l) => l.bookingId === id).map((l) => (l.qty > 1 ? `${l.qty}× ${l.name}` : l.name)).join(', ');
+const totals = rows.reduce((a, r) => ({ total: a.total + r.b.totalCents, due: a.due + Math.max(0, r.b.totalCents - r.b.paidCents) }), { total: 0, due: 0 });
+
+// Calendar grid (Mon-start)
+const first = month.firstDay;
+const lead = (new Date(first + 'T12:00:00Z').getUTCDay() + 6) % 7;
+const nDays = Math.round((Date.parse(month.nextFirstDay) - Date.parse(first)) / 86_400_000);
+const cells: (string | null)[] = [...Array(lead).fill(null), ...Array.from({ length: nDays }, (_, i) => addDays(first, i))];
+while (cells.length % 7) cells.push(null);
+const byDay = new Map<string, typeof rows>();
+for (const r of rows) { const d = localDay(r.b.startsAt, tz); byDay.set(d, [...(byDay.get(d) ?? []), r]); }
+const prevMonth = addDays(first, -1).slice(0, 7), nextMonth = month.nextFirstDay.slice(0, 7);
+const maxPerDay = t.settings?.maxEventsPerDay ?? 0;
+
+const tabs = [['upcoming', 'Upcoming'], ['all', 'All'], ['pending', 'Pending'], ['confirmed', 'Confirmed'], ['quote', 'Quotes'], ['completed', 'Completed'], ['canceled', 'Canceled'], ['unpaid', 'Balance due']];
+const qs = (o: Record<string, string>) => { const u = new URLSearchParams(); for (const [k, v] of Object.entries({ q: search, from: fromDay, to: toDay, status, ...o })) if (v) u.set(k, v); return '?' + u.toString(); };
+---
+<AppLayout title="Bookings" section="bookings" subtitle="Every event, payment and delivery in one place." wide>
+  <Fragment slot="actions">
+    <div class="inline-flex rounded-xl border border-line bg-white p-1" role="group" aria-label="View">
+      <a href="/app/bookings" aria-current={view === 'list' ? 'page' : undefined} class:list={['px-3 py-1.5 rounded-lg text-sm font-semibold inline-flex items-center gap-1.5', view === 'list' ? 'bg-brand-soft text-brand' : 'text-ink-2 hover:text-ink']}><Icon name="menu" size={15} />List</a>
+      <a href="/app/bookings?view=calendar" aria-current={view === 'calendar' ? 'page' : undefined} class:list={['px-3 py-1.5 rounded-lg text-sm font-semibold inline-flex items-center gap-1.5', view === 'calendar' ? 'bg-brand-soft text-brand' : 'text-ink-2 hover:text-ink']}><Icon name="calendar" size={15} />Calendar</a>
+    </div>
+  </Fragment>
+
+  {view === 'list' ? (
+    <>
+      <nav aria-label="Status filter" class="flex gap-1.5 overflow-x-auto pb-2 -mx-1 px-1">
+        {tabs.map(([k, label]) => (
+          <a href={qs({ status: k })} aria-current={status === k ? 'page' : undefined}
+            class:list={['whitespace-nowrap rounded-full px-3.5 py-1.5 text-sm font-semibold border', status === k ? 'bg-ink text-white border-ink' : 'bg-white border-line text-ink-2 hover:text-ink']}>{label}</a>
+        ))}
+      </nav>
+      <form method="get" class="card p-3 mt-3 grid gap-3 sm:grid-cols-[1fr_auto_auto_auto] items-end">
+        <input type="hidden" name="status" value={status} />
+        <div><label class="label" for="q">Search</label><input id="q" name="q" class="input" type="search" placeholder="Name, email, phone, city or #number" value={search} /></div>
+        <div><label class="label" for="from">From</label><input id="from" name="from" type="date" class="input" value={fromDay} /></div>
+        <div><label class="label" for="to">To</label><input id="to" name="to" type="date" class="input" value={toDay} /></div>
+        <div class="flex gap-2"><button class="btn-primary"><Icon name="search" size={16} />Filter</button>{(search || fromDay || toDay) && <a class="btn-ghost" href={`?status=${status}`}>Clear</a>}</div>
+      </form>
+
+      {rows.length === 0 ? (
+        <div class="card mt-4 p-10 text-center">
+          <span class="mx-auto grid place-items-center size-12 rounded-2xl bg-brand-soft text-brand"><Icon name="calendar" /></span>
+          <h2 class="font-bold text-lg mt-3">No bookings match</h2>
+          <p class="text-sm text-ink-2 mt-1">Try another filter, or take a phone order in under a minute.</p>
+          <a href="/app/bookings/new" class="btn-primary mt-4"><Icon name="plus" size={16} />New booking</a>
+        </div>
+      ) : (
+        <>
+          <p class="text-sm text-ink-2 mt-4 mb-2">{rows.length} booking{rows.length === 1 ? '' : 's'} · {money(totals.total)} total · <span class:list={[totals.due ? 'text-warn font-semibold' : '']}>{money(totals.due)} balance due</span></p>
+          <div class="card overflow-hidden hidden md:block">
+            <table class="table">
+              <thead><tr><th scope="col">#</th><th scope="col">Event</th><th scope="col">Customer</th><th scope="col">Items</th><th scope="col">Status</th><th scope="col" class="text-right">Total</th><th scope="col" class="text-right">Balance</th></tr></thead>
+              <tbody>
+                {rows.map(({ b, c }) => (
+                  <tr class="hover:bg-canvas/60">
+                    <td><a href={`/app/bookings/${b.id}`} class="font-bold text-brand">#{b.number}</a></td>
+                    <td class="whitespace-nowrap"><span class="font-semibold">{dayTitle(localDay(b.startsAt, tz), today)}</span><span class="block text-xs text-ink-2">{time(b.startsAt, tz)}–{time(b.endsAt, tz)} · {b.city || b.zip}</span></td>
+                    <td><a href={`/app/bookings/${b.id}`} class="font-medium hover:text-brand">{c?.name || 'Unknown'}</a><span class="block text-xs text-ink-2">{c?.phone}</span></td>
+                    <td class="max-w-64"><span class="line-clamp-2 text-ink-2">{linesOf(b.id)}</span></td>
+                    <td><StatusChip status={b.status} /></td>
+                    <td class="text-right tabular-nums font-semibold">{money(b.totalCents)}</td>
+                    <td class:list={['text-right tabular-nums', b.totalCents > b.paidCents && b.status !== 'canceled' ? 'text-warn font-semibold' : 'text-ink-2']}>{b.status === 'canceled' ? '—' : b.totalCents > b.paidCents ? money(b.totalCents - b.paidCents) : 'Paid'}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+          <ul class="md:hidden space-y-2">
+            {rows.map(({ b, c }) => (
+              <li><a href={`/app/bookings/${b.id}`} class="card p-4 block">
+                <div class="flex items-center gap-2"><span class="font-bold text-brand">#{b.number}</span><StatusChip status={b.status} /><span class="ml-auto font-semibold tabular-nums">{money(b.totalCents)}</span></div>
+                <p class="font-semibold mt-1">{c?.name || 'Unknown'}</p>
+                <p class="text-xs text-ink-2">{dayTitle(localDay(b.startsAt, tz), today)} · {time(b.startsAt, tz)} · {b.city || b.zip}</p>
+                <p class="text-xs text-ink-2 mt-1 line-clamp-1">{linesOf(b.id)}</p>
+                {b.totalCents > b.paidCents && b.status !== 'canceled' && <p class="text-xs font-semibold text-warn mt-1">{money(b.totalCents - b.paidCents)} balance due</p>}
+              </a></li>
+            ))}
+          </ul>
+        </>
+      )}
+    </>
+  ) : (
+    <section class="card overflow-hidden" aria-labelledby="cal-h">
+      <header class="flex items-center gap-2 px-4 sm:px-5 py-3 border-b border-line">
+        <a href={`?view=calendar&month=${prevMonth}`} class="btn-ghost px-3 min-h-9" aria-label="Previous month"><Icon name="arrow" size={16} class="rotate-180" /></a>
+        <h2 id="cal-h" class="font-bold text-lg flex-1 text-center sm:text-left sm:flex-none sm:px-2">{month.label}</h2>
+        <a href={`?view=calendar&month=${nextMonth}`} class="btn-ghost px-3 min-h-9" aria-label="Next month"><Icon name="arrow" size={16} /></a>
+        <a href="?view=calendar" class="btn-ghost min-h-9 hidden sm:inline-flex">Today</a>
+        <p class="ml-auto text-sm text-ink-2 hidden md:block">{rows.length} events · {money(totals.total)}</p>
+      </header>
+      <div class="grid grid-cols-7 text-center text-[11px] font-semibold uppercase tracking-wide text-ink-2 bg-canvas/60 border-b border-line" aria-hidden="true">
+        {['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'].map((d) => <div class="py-2">{d}</div>)}
+      </div>
+      <div class="grid grid-cols-7" role="list">
+        {cells.map((d) => {
+          if (!d) return <div class="min-h-14 sm:min-h-28 border-b border-r border-line bg-canvas/40" aria-hidden="true"></div>;
+          const evs = byDay.get(d) ?? [];
+          const full = maxPerDay > 0 && evs.length >= maxPerDay;
+          return (
+            <div role="listitem" class:list={['min-h-14 sm:min-h-28 border-b border-r border-line p-1 sm:p-1.5', d === today && 'bg-brand-soft/50']}>
+              <div class="flex items-center justify-between">
+                <a href={`/app/deliveries?day=${d}`} class:list={['text-xs font-semibold grid place-items-center size-6 rounded-full', d === today ? 'bg-brand text-white' : 'text-ink-2 hover:bg-canvas']} aria-label={`${dayTitle(d, today)}: ${evs.length} events — open deliveries`}>{Number(d.slice(8))}</a>
+                {evs.length > 0 && <span class:list={['sm:hidden chip px-1.5', full ? 'bg-red-100 text-red-800' : 'bg-brand text-white']}>{evs.length}</span>}
+                {full && <span class="hidden sm:inline chip bg-red-100 text-red-800 px-1.5">Full</span>}
+              </div>
+              <ul class="hidden sm:block mt-1 space-y-1">
+                {evs.slice(0, 3).map(({ b, c }) => (
+                  <li><a href={`/app/bookings/${b.id}`} class:list={['block truncate rounded-md px-1.5 py-0.5 text-[11px] font-medium', STATUS[b.status]?.cls ?? 'bg-canvas']} title={`#${b.number} ${c?.name ?? ''} · ${linesOf(b.id)}`}>
+                    {time(b.startsAt, tz).replace(':00', '')} {c?.name?.split(' ')[0] ?? `#${b.number}`}
+                  </a></li>
+                ))}
+                {evs.length > 3 && <li><a href={`/app/bookings?status=all&from=${d}&to=${d}`} class="text-[11px] font-semibold text-brand px-1.5">+{evs.length - 3} more</a></li>}
+              </ul>
+            </div>
+          );
+        })}
+      </div>
+      <div class="sm:hidden border-t border-line">
+        <h3 class="px-4 pt-3 text-sm font-bold">Agenda</h3>
+        {rows.length === 0 ? <p class="px-4 py-4 text-sm text-ink-2">No events this month.</p> : (
+          <ul class="divide-y divide-line">
+            {rows.map(({ b, c }) => (
+              <li><a href={`/app/bookings/${b.id}`} class="flex items-center gap-3 px-4 py-3">
+                <span class="text-center w-10 shrink-0"><span class="block text-[10px] uppercase text-ink-2">{new Intl.DateTimeFormat('en-US', { weekday: 'short', timeZone: tz }).format(b.startsAt)}</span><span class="block font-bold">{Number(localDay(b.startsAt, tz).slice(8))}</span></span>
+                <span class="min-w-0 flex-1"><span class="block text-sm font-semibold truncate">{c?.name || `#${b.number}`}</span><span class="block text-xs text-ink-2 truncate">{time(b.startsAt, tz)} · {linesOf(b.id)}</span></span>
+                <StatusChip status={b.status} />
+              </a></li>
+            ))}
+          </ul>
+        )}
+      </div>
+    </section>
+  )}
+</AppLayout>

@@ -1,0 +1,14 @@
+---
+import ProductPage from '../../../../../components/site/ProductPage.astro';
+import SiteLayout from '../../../../../layouts/SiteLayout.astro';
+import NotFound from '../../../../../components/site/NotFound.astro';
+import { loadSiteCtx } from '../../../../../lib/site/data';
+
+const ctx = await loadSiteCtx(Astro.locals, Astro.params.tenant);
+if (!ctx) return new Response('Not found', { status: 404 });
+const item = ctx.items.find((i) => i.slug === Astro.params.item);
+// One canonical URL per product (research §4.1) — redirect alternates.
+if (item && ctx.itemPath(item) !== `/rentals/${Astro.params.category}/${Astro.params.item}`) return Astro.redirect(ctx.href(ctx.itemPath(item)), 301);
+if (!item) Astro.response.status = 404;
+---
+{item ? <ProductPage ctx={ctx} item={item} /> : <SiteLayout ctx={ctx} title="Rental not found" noindex><NotFound ctx={ctx} what="rental" /></SiteLayout>}

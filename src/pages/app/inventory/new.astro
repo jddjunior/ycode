@@ -1,0 +1,45 @@
+---
+import { eq } from 'drizzle-orm';
+import AppLayout from '../../../layouts/AppLayout.astro';
+import ItemForm from './_ItemForm.astro';
+import { getDb, schema } from '../../../db/client';
+import { formData, flash, parse } from '../../../lib/forms';
+import { opsCtx } from '../../../lib/ops/ctx';
+import { readItemForm, ItemSchema } from '../../../lib/ops/items';
+import { logActivity } from '../../../lib/ops/stats';
+
+const { t, settings, canManage } = opsCtx(Astro);
+if (!canManage) return Astro.redirect('/app/crew');
+const db = await getDb();
+const [cats, others] = await Promise.all([
+  db.select({ id: schema.categories.id, name: schema.categories.name }).from(schema.categories).where(eq(schema.categories.tenantId, t.id)).orderBy(schema.categories.sort),
+  db.select({ id: schema.items.id, name: schema.items.name, kind: schema.items.kind }).from(schema.items).where(eq(schema.items.tenantId, t.id)).orderBy(schema.items.name),
+]);
+const valid = new Set([...others.map((o) => o.id), ...cats.map((c) => 'cat:' + c.id)]);
+const qk = Astro.url.searchParams.get('kind');
+let item: Record<string, unknown> = { kind: qk === 'addon' || qk === 'package' ? qk : 'rental', active: true, images: [] };
+let error = '';
+
+const f = await formData(Astro);
+if (f) {
+  const v = readItemForm(f, valid);
+  item = v;
+  const r = parse(ItemSchema, v);
+  if (!r.ok) error = Object.values(r.errors)[0];
+  else if (v.kind === 'package' && !v.bundle.length) error = 'Packages need at least one component item.';
+  else {
+    try {
+      const [row] = await db.insert(schema.items).values({ ...v, tenantId: t.id }).returning();
+      await logActivity(t.id, 'inventory', `New ${v.kind} added: ${v.name}`, { itemId: row.id });
+      flash(Astro.cookies, `${v.name} added — it’s live on your site${v.active ? '' : ' once you mark it active'}.`);
+      return Astro.redirect(`/app/inventory/${row.id}`, 303);
+    } catch (e) {
+      error = String((e as Error).message).includes('items_slug_uq') ? 'Another item already uses that URL slug.' : 'Couldn’t save the item.';
+    }
+  }
+}
+---
+<AppLayout title="Add item" section="inventory" subtitle="Rentals, add-ons and money-saving packages." wide>
+  <Fragment slot="actions"><a href="/app/inventory" class="btn-ghost">Cancel</a></Fragment>
+  <ItemForm item={item} categories={cats} others={others} surfaces={settings.surfaces ?? []} error={error} submitLabel="Create item" />
+</AppLayout>
