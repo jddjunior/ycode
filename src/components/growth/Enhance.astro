@@ -1,0 +1,38 @@
+---
+/**
+ * Progressive enhancement for every growth page (include once):
+ *  - data-confirm="…" on a <form> or submit button → confirm() before submitting
+ *  - submit buttons go disabled + aria-busy with a "Working…" label (prevents double sends)
+ *  - the first field with aria-invalid="true" gets focus after a failed POST
+ */
+---
+<script>
+  function wire() {
+    document.addEventListener('submit', (e) => {
+      const form = e.target as HTMLFormElement;
+      const btn = (e as SubmitEvent).submitter as HTMLButtonElement | null;
+      const msg = btn?.dataset.confirm ?? form.dataset.confirm;
+      if (msg && !confirm(msg)) { e.preventDefault(); return; }
+      if (form.method.toLowerCase() !== 'post' || form.dataset.noBusy !== undefined) return;
+      // Defer so the submitter's name/value is still sent with the form.
+      setTimeout(() => {
+        form.setAttribute('aria-busy', 'true');
+        form.querySelectorAll<HTMLButtonElement>('button:not([type=button])').forEach((b) => {
+          b.disabled = true;
+          if (b === btn && b.dataset.busy !== 'off') { b.dataset.label = b.innerHTML; b.innerHTML = `<span class="g-spin" aria-hidden="true"></span>${b.dataset.busy ?? 'Working…'}`; }
+        });
+      }, 0);
+    });
+    // Back/forward cache: re-enable buttons.
+    window.addEventListener('pageshow', () => document.querySelectorAll<HTMLButtonElement>('form[aria-busy] button').forEach((b) => { b.disabled = false; if (b.dataset.label) b.innerHTML = b.dataset.label; }));
+    document.querySelector<HTMLElement>('[aria-invalid="true"]')?.focus();
+  }
+  wire();
+</script>
+<style is:global>
+  .g-spin { width: 14px; height: 14px; border-radius: 99px; border: 2px solid currentColor; border-right-color: transparent; display: inline-block; animation: g-spin .7s linear infinite; }
+  @keyframes g-spin { to { transform: rotate(360deg); } }
+  @media (prefers-reduced-motion: reduce) { .g-spin { animation-duration: 2s; } }
+  .g-err { color: var(--color-danger); font-size: .75rem; margin-top: .25rem; font-weight: 500; }
+  [aria-invalid="true"].input { border-color: var(--color-danger); box-shadow: 0 0 0 3px color-mix(in srgb, var(--color-danger) 15%, transparent); }
+</style>

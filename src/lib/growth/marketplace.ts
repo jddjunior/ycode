@@ -4,6 +4,7 @@ import { getDb, schema } from '../../db/client';
 import type { Tenant } from '../auth';
 import { siteOrigin, platformUrl } from '../tenant';
 import { send } from '../notify';
+import { itemPath } from './blockdefs';
 
 const PLAN_RANK = sql`case ${schema.tenants.plan} when 'elite' then 0 when 'pro' then 1 else 2 end`;
 
@@ -28,8 +29,8 @@ export async function operatorsForZip(zip: string, limit = 12): Promise<MarketOp
   const ids = rows.map((r) => r.t.id);
   const stats = new Map((await db.select({ id: schema.reviews.tenantId, avg: sql<number>`avg(${schema.reviews.rating})::float`, n: sql<number>`count(*)::int` })
     .from(schema.reviews).where(inArray(schema.reviews.tenantId, ids)).groupBy(schema.reviews.tenantId)).map((s) => [s.id, s]));
-  const items = await db.select({ tenantId: schema.items.tenantId, name: schema.items.name, slug: schema.items.slug, images: schema.items.images, priceCents: schema.items.priceCents, featured: schema.items.featured })
-    .from(schema.items).where(and(inArray(schema.items.tenantId, ids), eq(schema.items.active, true), ne(schema.items.kind, 'addon')))
+  const items = await db.select({ tenantId: schema.items.tenantId, name: schema.items.name, slug: schema.items.slug, kind: schema.items.kind, cat: schema.categories.slug, images: schema.items.images, priceCents: schema.items.priceCents, featured: schema.items.featured })
+    .from(schema.items).leftJoin(schema.categories, eq(schema.categories.id, schema.items.categoryId)).where(and(inArray(schema.items.tenantId, ids), eq(schema.items.active, true), ne(schema.items.kind, 'addon')))
     .orderBy(desc(schema.items.featured), schema.items.sort);
   const q = marketUtm(zip);
   const out: MarketOperator[] = [];
@@ -39,7 +40,7 @@ export async function operatorsForZip(zip: string, limit = 12): Promise<MarketOp
     out.push({
       tenant: r.t, origin, storefront: `${origin}/?${q}`, deliveryFeeCents: r.fee ?? 0,
       rating: st ? Math.round(st.avg * 10) / 10 : null, reviewCount: st?.n ?? 0,
-      items: items.filter((i) => i.tenantId === r.t.id).slice(0, 3).map((i) => ({ name: i.name, slug: i.slug, image: i.images[0] ?? null, priceCents: i.priceCents, url: `${origin}/rentals/${i.slug}?${q}` })),
+      items: items.filter((i) => i.tenantId === r.t.id).slice(0, 3).map((i) => ({ name: i.name, slug: i.slug, image: i.images[0] ?? null, priceCents: i.priceCents, url: `${origin}${itemPath(i.kind, i.cat, i.slug)}?${q}` })),
     });
   }
   // Better-reviewed operators first within the same plan tier.

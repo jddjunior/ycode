@@ -1,0 +1,78 @@
+---
+/** Settings → Business profile. */
+import { z } from 'zod';
+import Shell from './_Shell.astro';
+import Help from '../../../components/ops/Help.astro';
+import Err from '../../../components/ops/Err.astro';
+import Icon from '../../../components/Icon.astro';
+import { formData, str, flash, parse } from '../../../lib/forms';
+import { opsCtx } from '../../../lib/ops/ctx';
+import { updateTenant, TIMEZONES } from '../../../lib/ops/settings';
+
+const { t, canManage } = opsCtx(Astro);
+let errors: Record<string, string> = {};
+let v = { name: t.name, phone: t.phone, email: t.email, addressLine: t.addressLine, city: t.city, state: t.state, zip: t.zip, lat: t.lat == null ? '' : String(t.lat), lng: t.lng == null ? '' : String(t.lng), timezone: t.timezone, logoUrl: t.logoUrl ?? '' };
+
+const f = await formData(Astro);
+if (f && canManage) {
+  v = { name: str(f, 'name', 120), phone: str(f, 'phone', 40), email: str(f, 'email', 200), addressLine: str(f, 'addressLine', 200), city: str(f, 'city', 80), state: str(f, 'state', 2).toUpperCase(), zip: str(f, 'zip', 10), lat: str(f, 'lat', 20), lng: str(f, 'lng', 20), timezone: str(f, 'timezone', 60), logoUrl: str(f, 'logoUrl', 500) };
+  const coord = (min: number, max: number, label: string) => z.string().refine((s) => s === '' || (Number.isFinite(Number(s)) && Number(s) >= min && Number(s) <= max), `${label} must be between ${min} and ${max}`);
+  const r = parse(z.object({
+    name: z.string().min(2, 'Business name is required'),
+    email: z.union([z.literal(''), z.string().email('Enter a valid email')]),
+    state: z.union([z.literal(''), z.string().regex(/^[A-Z]{2}$/, 'Use the 2-letter state code')]),
+    zip: z.union([z.literal(''), z.string().regex(/^\d{5}(-\d{4})?$/, 'Enter a 5-digit ZIP')]),
+    lat: coord(-90, 90, 'Latitude'), lng: coord(-180, 180, 'Longitude'),
+    timezone: z.string().refine((tz) => { try { new Intl.DateTimeFormat('en-US', { timeZone: tz }); return true; } catch { return false; } }, 'Unknown timezone'),
+    logoUrl: z.union([z.literal(''), z.string().regex(/^(https:\/\/|\/)[^\s"'<>]+$/, 'Use an https:// or /path URL')]),
+  }), v);
+  if (!r.ok) errors = r.errors;
+  else {
+    await updateTenant(t.id, { ...v, lat: v.lat === '' ? null : Number(v.lat), lng: v.lng === '' ? null : Number(v.lng), logoUrl: v.logoUrl || null });
+    flash(Astro.cookies, 'Business profile saved — your website and receipts now use these details.');
+    return Astro.redirect('/app/settings', 303);
+  }
+}
+const ro = !canManage;
+const tzList = TIMEZONES.includes(v.timezone) ? TIMEZONES : [v.timezone, ...TIMEZONES];
+const inv = (k: string) => (errors[k] ? { 'aria-invalid': 'true', 'aria-describedby': `${k}-err` } : {});
+---
+<Shell title="Settings" subtitle="Your business details, rules and connections." active="profile">
+  <Help benefit="Customers see these details on your website, receipts and texts — and your depot location powers route planning and weather checks.">
+    <ul>
+      <li><strong>Depot latitude/longitude</strong> is where your trucks start. Right-click your yard in Google Maps and copy the numbers.</li>
+      <li><strong>Timezone</strong> controls event times, the daily Game Plan and when reminders go out.</li>
+      <li>Your logo appears in the site header and on receipts. Square PNG or SVG works best.</li>
+    </ul>
+  </Help>
+  {Object.keys(errors).length > 0 && <p role="alert" class="mb-4 rounded-xl bg-red-50 border border-red-200 text-red-800 text-sm px-4 py-3">Please fix the highlighted fields — nothing was saved yet.</p>}
+  <form method="post" class="space-y-6" novalidate>
+    <section class="card p-5" aria-labelledby="biz-h">
+      <h2 id="biz-h" class="font-bold text-lg">Business</h2>
+      <div class="grid gap-3 sm:grid-cols-2 mt-3">
+        <div class="sm:col-span-2"><label class="label" for="name">Business name</label><input id="name" name="name" class="input" value={v.name} required disabled={ro} {...inv('name')} /><Err id="name-err" msg={errors.name} /></div>
+        <div><label class="label" for="phone">Phone</label><input id="phone" name="phone" type="tel" class="input" value={v.phone} disabled={ro} /></div>
+        <div><label class="label" for="email">Email</label><input id="email" name="email" type="email" class="input" value={v.email} disabled={ro} {...inv('email')} /><Err id="email-err" msg={errors.email} /></div>
+        <div class="sm:col-span-2"><label class="label" for="logoUrl">Logo URL</label>
+          <div class="flex gap-3 items-center">
+            {v.logoUrl ? <img src={v.logoUrl} alt="Current logo" class="size-11 rounded-lg border border-line object-contain bg-white" /> : <span class="grid place-items-center size-11 rounded-lg bg-pop text-[#1B1F4A] font-black shrink-0" aria-hidden="true">{v.name.slice(0, 1)}</span>}
+            <input id="logoUrl" name="logoUrl" class="input" value={v.logoUrl} placeholder="https://…/logo.png" disabled={ro} {...inv('logoUrl')} />
+          </div><Err id="logoUrl-err" msg={errors.logoUrl} /></div>
+      </div>
+    </section>
+    <section class="card p-5" aria-labelledby="addr-h">
+      <h2 id="addr-h" class="font-bold text-lg">Depot address & timezone</h2>
+      <div class="grid gap-3 sm:grid-cols-6 mt-3">
+        <div class="sm:col-span-6"><label class="label" for="addressLine">Street address</label><input id="addressLine" name="addressLine" class="input" value={v.addressLine} disabled={ro} /></div>
+        <div class="sm:col-span-3"><label class="label" for="city">City</label><input id="city" name="city" class="input" value={v.city} disabled={ro} /></div>
+        <div class="sm:col-span-1"><label class="label" for="state">State</label><input id="state" name="state" class="input uppercase" maxlength="2" value={v.state} disabled={ro} {...inv('state')} /><Err id="state-err" msg={errors.state} /></div>
+        <div class="sm:col-span-2"><label class="label" for="zip">ZIP</label><input id="zip" name="zip" class="input" inputmode="numeric" value={v.zip} disabled={ro} {...inv('zip')} /><Err id="zip-err" msg={errors.zip} /></div>
+        <div class="sm:col-span-2"><label class="label" for="lat">Depot latitude</label><input id="lat" name="lat" class="input tabular-nums" inputmode="decimal" value={v.lat} placeholder="29.7989" disabled={ro} {...inv('lat')} /><Err id="lat-err" msg={errors.lat} /></div>
+        <div class="sm:col-span-2"><label class="label" for="lng">Depot longitude</label><input id="lng" name="lng" class="input tabular-nums" inputmode="decimal" value={v.lng} placeholder="-95.4103" disabled={ro} {...inv('lng')} /><Err id="lng-err" msg={errors.lng} /></div>
+        <div class="sm:col-span-2"><label class="label" for="timezone">Timezone</label><select id="timezone" name="timezone" class="input" disabled={ro} {...inv('timezone')}>{tzList.map((z) => <option value={z} selected={z === v.timezone}>{z.replace('America/', '').replace('_', ' ')}</option>)}</select><Err id="timezone-err" msg={errors.timezone} /></div>
+      </div>
+      <p class="hint">Without coordinates the route planner falls back to time order and weather checks are skipped.</p>
+    </section>
+    {canManage && <div class="flex justify-end"><button class="btn-primary" data-busy-label="Saving…"><Icon name="check" size={16} />Save profile</button></div>}
+  </form>
+</Shell>

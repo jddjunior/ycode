@@ -1,0 +1,61 @@
+---
+/** Settings frame: AppLayout + settings sub-navigation + breadcrumbs. */
+import AppLayout from '../../../layouts/AppLayout.astro';
+import Icon from '../../../components/Icon.astro';
+import Crumbs from '../../../components/ops/Crumbs.astro';
+import SubmitGuard from '../../../components/ops/SubmitGuard.astro';
+
+interface Props { title: string; subtitle?: string; active: string }
+const { title, subtitle, active } = Astro.props;
+const role = Astro.locals.session?.role;
+const groups = [
+  { label: 'Business', items: [
+    { k: 'profile', href: '/app/settings', label: 'Business profile', icon: 'home' },
+    { k: 'booking', href: '/app/settings/booking', label: 'Booking rules', icon: 'calendar' },
+    { k: 'zones', href: '/app/settings/zones', label: 'Delivery zones', icon: 'map' },
+    { k: 'blackouts', href: '/app/settings/blackouts', label: 'Blackout dates', icon: 'x' },
+    { k: 'coupons', href: '/app/settings/coupons', label: 'Coupons', icon: 'gift' },
+  ] },
+  { label: 'Money & growth', items: [
+    { k: 'payments', href: '/app/settings/payments', label: 'Payments', icon: 'dollar' },
+    { k: 'integrations', href: '/app/settings/integrations', label: 'Tracking & socials', icon: 'chart' },
+  ] },
+  { label: 'Account (owner)', items: [
+    { k: 'team', href: '/app/settings/team', label: 'Team & crew', icon: 'users', owner: true },
+    { k: 'domains', href: '/app/settings/domains', label: 'Domains', icon: 'globe', owner: true },
+    { k: 'billing', href: '/app/settings/billing', label: 'Plan & billing', icon: 'trophy', owner: true },
+  ] },
+];
+const current = groups.flatMap((g) => g.items).find((i) => i.k === active);
+---
+<AppLayout title={title} section="settings" subtitle={subtitle} wide>
+  <Crumbs items={[{ label: 'Settings', href: '/app/settings' }, { label: current?.label ?? title }]} />
+  <div class="grid gap-6 lg:grid-cols-[220px_minmax(0,1fr)]">
+    <nav aria-label="Settings sections" class="lg:sticky lg:top-20 self-start">
+      <div class="lg:hidden">
+        <label for="settings-nav" class="sr-only">Settings section</label>
+        <select id="settings-nav" class="input" onchange="location.href=this.value">
+          {groups.flatMap((g) => g.items).filter((i) => !('owner' in i) || role === 'owner').map((i) => <option value={i.href} selected={i.k === active}>{i.label}</option>)}
+        </select>
+      </div>
+      <div class="hidden lg:block space-y-4">
+        {groups.map((g) => (
+          <div>
+            <p class="px-3 text-[11px] font-semibold uppercase tracking-wider text-ink-2/70">{g.label}</p>
+            <ul class="mt-1 space-y-0.5">
+              {g.items.map((i) => {
+                const locked = 'owner' in i && role !== 'owner';
+                return (
+                  <li><a href={i.href} aria-current={i.k === active ? 'page' : undefined} class:list={['flex items-center gap-2.5 rounded-lg px-3 py-2 text-sm font-medium', i.k === active ? 'bg-white border border-line shadow-sm text-brand' : 'text-ink-2 hover:bg-white hover:text-ink', locked && 'opacity-50']}>
+                    <Icon name={i.icon} size={16} />{i.label}{locked && <span class="sr-only">(owner only)</span>}</a></li>
+                );
+              })}
+            </ul>
+          </div>
+        ))}
+      </div>
+    </nav>
+    <div class="min-w-0"><slot /></div>
+  </div>
+  <SubmitGuard />
+</AppLayout>

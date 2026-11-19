@@ -1,0 +1,187 @@
+---
+/** Customer booking page: status, what happens next, prep checklist, receipt, pay balance, calendar, weather. */
+import { and, eq } from 'drizzle-orm';
+import SiteLayout from '../../../../layouts/SiteLayout.astro';
+import NotFound from '../../../../components/site/NotFound.astro';
+import Icon from '../../../../components/Icon.astro';
+import { getDb, schema } from '../../../../db/client';
+import { loadSiteCtx, telHref, smsHref, firstImage } from '../../../../lib/site/data';
+import { bookingWithLines } from '../../../../lib/booking';
+import { forecast } from '../../../../lib/weather';
+import { formatLocal, localDay } from '../../../../lib/time';
+import { money } from '../../../../lib/pricing';
+
+const ctx = await loadSiteCtx(Astro.locals, Astro.params.tenant);
+if (!ctx) return new Response('Not found', { status: 404 });
+const t = ctx.tenant;
+const tok = String(Astro.params.token ?? '').slice(0, 64);
+const db = await getDb();
+const [row] = tok ? await db.select({ id: schema.bookings.id }).from(schema.bookings).where(and(eq(schema.bookings.tenantId, t.id), eq(schema.bookings.publicToken, tok))).limit(1) : [];
+const full = row ? await bookingWithLines(t.id, row.id) : null;
+if (!full) Astro.response.status = 404;
+Astro.response.headers.set('cache-control', 'private, no-store');
+const b = full?.booking;
+const q = Astro.url.searchParams;
+const justPaid = q.get('confirmed') === '1';
+const now = Date.now();
+const holdLive = b?.status === 'hold' && b.holdExpiresAt && b.holdExpiresAt.getTime() > now;
+const lapsed = b?.status === 'hold' && !holdLive;
+const balance = b ? Math.max(0, b.totalCents - b.paidCents) : 0;
+const tz = t.timezone;
+const day = b ? localDay(b.startsAt, tz) : '';
+const dateLong = b ? formatLocal(b.startsAt, tz, { weekday: 'long', month: 'long', day: 'numeric', year: 'numeric' }) : '';
+const timeRange = b ? `${formatLocal(b.startsAt, tz, { hour: 'numeric', minute: '2-digit' })} – ${formatLocal(b.endsAt, tz, { hour: 'numeric', minute: '2-digit' })}` : '';
+const lat = b?.lat ?? t.lat, lng = b?.lng ?? t.lng;
+const wx = b && lat != null && lng != null && b.status !== 'canceled' && b.endsAt.getTime() > now ? await forecast(lat, lng, day, t.settings?.windLimitMph ?? 15) : null;
+const lineItems = full ? full.lines.map((l) => ({ ...l, item: ctx.itemById.get(l.itemId) })) : [];
+const hasWet = lineItems.some((l) => l.item?.isWet);
+const needsPower = !b?.notes.includes('generator needed');
+const statusInfo = !b ? null
+  : b.status === 'confirmed' || b.status === 'pending' && b.paidCents > 0 ? { tone: 'ok', label: 'Confirmed', text: `You’re booked for ${dateLong}.` }
+  : b.status === 'completed' ? { tone: 'ok', label: 'Completed', text: 'Thanks for partying with us!' }
+  : b.status === 'canceled' ? { tone: 'bad', label: 'Canceled', text: 'This booking was canceled.' }
+  : holdLive ? { tone: 'warn', label: 'Awaiting deposit', text: `Your items are held until ${formatLocal(b.holdExpiresAt!, tz, { hour: 'numeric', minute: '2-digit' })}. Pay the deposit to confirm.` }
+  : lapsed ? { tone: 'bad', label: 'Hold expired', text: 'This hold expired before the deposit was paid. Start a new booking or text us — we’ll try to rebuild it.' }
+  : { tone: 'warn', label: 'Pending', text: 'We’re reviewing your request.' };
+const paidUp = b && b.paidCents > 0;
+const gcal = b ? `https://calendar.google.com/calendar/render?action=TEMPLATE&text=${encodeURIComponent(`${t.name} party rental`)}&dates=${b.startsAt.toISOString().replace(/[-:]|\.\d{3}/g, '')}/${b.endsAt.toISOString().replace(/[-:]|\.\d{3}/g, '')}&details=${encodeURIComponent(`Booking #${b.number}: ${ctx.abs(`/booking/${b.publicToken}`)}`)}&location=${encodeURIComponent(`${b.address}, ${b.city} ${b.state} ${b.zip}`)}` : '';
+const wxTone = wx?.level === 'stop' ? 's-chip-bad' : wx?.level === 'watch' ? 's-chip-warn' : 's-chip-ok';
+const confettiColors = ['var(--c-primary)', 'var(--c-accent)', '#FFC928', '#22A559', '#FF6FB5'];
+---
+<SiteLayout ctx={ctx} title={b ? `Booking #${b.number}` : 'Booking not found'} noindex conversion={justPaid && b && paidUp ? { valueCents: b.totalCents, id: `${t.slug}-${b.number}` } : null}>
+  {!b || !statusInfo ? <NotFound ctx={ctx} what="booking" /> : (
+    <>
+      <section class="s-hero-bg relative overflow-hidden">
+        {justPaid && paidUp && (
+          <div class="bos-confetti" aria-hidden="true">
+            {Array.from({ length: 28 }, (_, i) => <i style={`--x:${(i * 37) % 100}%;--d:${(i % 7) * 0.18}s;--r:${(i * 53) % 360}deg;--c:${confettiColors[i % 5]}`} />)}
+          </div>
+        )}
+        <div class="s-wrap pt-10 pb-12 relative">
+          <p class={`s-chip ${statusInfo.tone === 'ok' ? 's-chip-ok' : statusInfo.tone === 'bad' ? 's-chip-bad' : 's-chip-warn'}`}>{statusInfo.label} · #{b.number}</p>
+          <h1 class="s-h1 mt-4 !text-[clamp(2.1rem,5.5vw,3.8rem)] max-w-3xl">
+            {justPaid && paidUp ? (q.get('balance') ? 'Payment received — thank you!' : `You’re booked! 🎉`) : statusInfo.label === 'Confirmed' ? `See you ${formatLocal(b.startsAt, tz, { weekday: 'long' })}!` : statusInfo.text}
+          </h1>
+          <p class="s-lede mt-3 max-w-2xl">{statusInfo.label === 'Confirmed' ? `${dateLong}, ${timeRange} at ${b.address}, ${b.city}. A confirmation is on its way to ${full!.customer?.email ?? 'your inbox'}.` : statusInfo.text}</p>
+          {q.get('stale') && <p class="mt-3 s-chip s-chip-warn">That payment link was already used — here’s your latest status.</p>}
+          {q.get('payerror') && <p class="mt-3 s-chip s-chip-bad">We couldn’t start the payment. Please try again or call us.</p>}
+          <div class="mt-6 flex flex-wrap gap-3">
+            {(holdLive || (paidUp && balance > 0 && b.status !== 'canceled')) && (
+              <form method="post" action={`${ctx.api}/pay`}>
+                <input type="hidden" name="token" value={b.publicToken} />
+                <button class="s-btn s-btn-cta s-btn-lg" type="submit">{holdLive && !paidUp ? `Pay ${money(b.depositCents)} deposit` : `Pay ${money(balance)} balance now`}</button>
+              </form>
+            )}
+            {lapsed && <a href={ctx.href('/book')} class="s-btn s-btn-cta s-btn-lg">Start a new booking</a>}
+            {b.status !== 'canceled' && <a href={ctx.href(`/booking/${b.publicToken}/event.ics`)} class="s-btn s-btn-ghost s-btn-lg"><Icon name="calendar" size={18} /> Add to calendar</a>}
+            {b.status !== 'canceled' && <a href={gcal} class="s-btn s-btn-ghost s-btn-lg" rel="noopener" target="_blank">Google Calendar</a>}
+          </div>
+        </div>
+      </section>
+
+      <div class="s-wrap py-10 grid lg:grid-cols-[1.2fr_.8fr] gap-8 items-start">
+        <div class="grid gap-8 min-w-0">
+          {paidUp && b.status !== 'canceled' && (
+            <section>
+              <h2 class="s-h2 !text-3xl">What happens next</h2>
+              <ol class="mt-5 grid gap-3">
+                {[
+                  ['message', 'Confirmation sent', `Check your email${full!.customer?.smsOptIn ? ' and texts' : ''} for your receipt and this page’s link.`],
+                  ['clock', 'Arrival window the day before', 'We text you a 2-hour arrival window. Setup usually happens 1–3 hours before your start time.'],
+                  ['truck', 'Delivery & safety walkthrough', 'The crew sets up, anchors, tests the blower and walks an adult through the safety rules.'],
+                  ['sparkle', 'Party, then pickup', `We pick up after ${formatLocal(b.endsAt, tz, { hour: 'numeric', minute: '2-digit' })}. Nothing to clean — we handle it.`],
+                ].map(([ic, h, p], i) => (
+                  <li class="s-card p-4 flex gap-4 items-start">
+                    <span class="grid place-items-center size-11 shrink-0 rounded-xl bg-primary text-primary-ink"><Icon name={ic} size={20} /></span>
+                    <span><span class="block font-extrabold">{i + 1}. {h}</span><span class="block text-sm s-sub mt-0.5">{p}</span></span>
+                  </li>
+                ))}
+              </ol>
+            </section>
+          )}
+
+          {b.status !== 'canceled' && (
+            <section class="s-tile p-5 sm:p-6">
+              <h2 class="s-h3 !text-xl">Before we arrive — prep checklist</h2>
+              <ul class="mt-4 grid sm:grid-cols-2 gap-3 text-sm font-semibold">
+                {[
+                  'Mow and clear the setup area (toys, rocks, pet waste)',
+                  'Mark sprinkler heads, and let us know about buried lines',
+                  needsPower ? 'A working outlet within 50 ft for each blower' : 'Generator is on your order — no outlet needed',
+                  hasWet ? 'Garden hose within 50 ft for the water slide' : 'Keep a path from the street to the setup spot clear',
+                  'Gate at least 4 ft wide, or tell us the best path',
+                  'An adult (18+) present for setup and the safety walkthrough',
+                ].map((x) => <li class="flex gap-2.5 items-start"><span class="grid place-items-center size-6 shrink-0 rounded-md border-2 border-[var(--c-primary)] text-primary" aria-hidden="true"><Icon name="check" size={14} /></span>{x}</li>)}
+              </ul>
+            </section>
+          )}
+
+          {wx && (
+            <section class="s-card p-5">
+              <h2 class="s-h3">Weather outlook for {formatLocal(b.startsAt, tz, { weekday: 'long', month: 'short', day: 'numeric' })}</h2>
+              <p class="mt-3 flex flex-wrap gap-2"><span class={`s-chip ${wxTone}`}>{wx.level === 'ok' ? 'Looks good' : wx.level === 'watch' ? 'Keep an eye on it' : 'Unsafe conditions forecast'}</span>
+                <span class="s-chip">Wind {Math.round(wx.maxWindMph)} mph · gusts {Math.round(wx.maxGustMph)}</span><span class="s-chip">{wx.precipProb}% rain</span><span class="s-chip">High {Math.round(wx.maxTempF)}°F</span></p>
+              {wx.reasons.length > 0 && <p class="mt-2 text-sm s-sub">{wx.reasons.join(' · ')}. If it’s unsafe we’ll reschedule free or give you a 12-month credit.</p>}
+            </section>
+          )}
+
+          <section>
+            <h2 class="s-h3 !text-xl">Event details</h2>
+            <dl class="mt-3 grid sm:grid-cols-2 gap-px bg-line rounded-[var(--r-card)] overflow-hidden border border-line text-sm">
+              <div class="bg-white p-4"><dt class="font-extrabold s-sub text-xs uppercase tracking-wider">When</dt><dd class="mt-1 font-bold">{dateLong}<br />{timeRange}</dd></div>
+              <div class="bg-white p-4"><dt class="font-extrabold s-sub text-xs uppercase tracking-wider">Where</dt><dd class="mt-1 font-bold">{b.address}<br />{b.city}, {b.state} {b.zip}</dd></div>
+              <div class="bg-white p-4"><dt class="font-extrabold s-sub text-xs uppercase tracking-wider">Setup</dt><dd class="mt-1 font-bold capitalize">{b.surface} · {b.eventType}</dd></div>
+              <div class="bg-white p-4"><dt class="font-extrabold s-sub text-xs uppercase tracking-wider">Agreement</dt><dd class="mt-1 font-bold">{b.agreementSignedName ? `E-signed by ${b.agreementSignedName}${b.agreementSignedAt ? ` · ${formatLocal(b.agreementSignedAt, tz, { dateStyle: 'medium' })}` : ''}` : 'Not signed yet'}</dd></div>
+              {b.notes && <div class="bg-white p-4 sm:col-span-2"><dt class="font-extrabold s-sub text-xs uppercase tracking-wider">Notes for the crew</dt><dd class="mt-1 whitespace-pre-line">{b.notes}</dd></div>}
+            </dl>
+          </section>
+        </div>
+
+        <aside class="grid gap-4 lg:sticky lg:top-24">
+          <section class="s-card p-5">
+            <h2 class="s-h3">Receipt</h2>
+            <ul class="mt-4 grid gap-3">
+              {lineItems.map((l) => (
+                <li class="flex gap-3 items-center">
+                  {l.item && <img src={firstImage(l.item)} alt="" width="56" height="42" class="w-14 h-[42px] rounded-lg object-cover" />}
+                  <span class="flex-1 text-sm font-bold">{l.qty > 1 ? `${l.qty} × ` : ''}{l.name}</span>
+                  <span class="s-price text-sm">{money(l.totalCents)}</span>
+                </li>
+              ))}
+            </ul>
+            <dl class="mt-4 border-t border-line pt-3 grid gap-1.5 text-sm">
+              <div class="flex justify-between"><dt>Rentals</dt><dd class="s-price">{money(b.subtotalCents)}</dd></div>
+              <div class="flex justify-between"><dt>Delivery, setup & pickup</dt><dd class="s-price">{b.deliveryCents ? money(b.deliveryCents) : 'Free'}</dd></div>
+              {b.surfaceCents > 0 && <div class="flex justify-between"><dt>Surface setup</dt><dd class="s-price">{money(b.surfaceCents)}</dd></div>}
+              {b.damageWaiverCents > 0 && <div class="flex justify-between"><dt>Damage waiver</dt><dd class="s-price">{money(b.damageWaiverCents)}</dd></div>}
+              {b.discountCents > 0 && <div class="flex justify-between"><dt>Discount{b.couponCode ? ` (${b.couponCode})` : ''}</dt><dd class="s-price">−{money(b.discountCents)}</dd></div>}
+              {b.taxCents > 0 && <div class="flex justify-between"><dt>Tax</dt><dd class="s-price">{money(b.taxCents)}</dd></div>}
+              {b.customerFeeCents > 0 && <div class="flex justify-between"><dt>Booking fee</dt><dd class="s-price">{money(b.customerFeeCents)}</dd></div>}
+              <div class="flex justify-between text-base font-extrabold border-t border-line pt-2 mt-1"><dt>Total</dt><dd class="s-price">{money(b.totalCents)}</dd></div>
+              <div class="flex justify-between text-ok font-bold"><dt>Paid</dt><dd class="s-price">{money(b.paidCents)}</dd></div>
+              <div class="flex justify-between font-extrabold"><dt>Balance due</dt><dd class="s-price">{money(balance)}</dd></div>
+            </dl>
+            {paidUp && balance > 0 && b.status !== 'canceled' && <p class="mt-3 text-xs s-sub">Pay the balance any time here, or on delivery by card, cash or check.</p>}
+          </section>
+          <section class="s-tile p-5 text-sm">
+            <h2 class="font-extrabold">Need to change something?</h2>
+            <p class="s-sub mt-1">{t.settings?.cancellationPolicy ?? 'Contact us and we’ll help.'} Reply to your confirmation or reach us here:</p>
+            {t.phone && <div class="mt-3 grid grid-cols-2 gap-2">
+              <a href={smsHref(t.phone, `Hi! About booking #${b.number}: `)} class="s-btn s-btn-primary s-btn-sm"><Icon name="message" size={16} /> Text</a>
+              <a href={telHref(t.phone)} class="s-btn s-btn-ghost s-btn-sm"><Icon name="phone" size={16} /> Call</a>
+            </div>}
+          </section>
+          <a href={ctx.href('/rentals')} class="s-btn s-btn-ghost">Add something else to your party →</a>
+        </aside>
+      </div>
+    </>
+  )}
+</SiteLayout>
+<style is:global>
+  .bos-confetti { position: absolute; inset: 0; pointer-events: none; overflow: hidden; }
+  .bos-confetti i { position: absolute; top: -20px; left: var(--x); width: 10px; height: 16px; background: var(--c); border-radius: 3px; opacity: 0; transform: rotate(var(--r));
+    animation: bos-fall 2.8s cubic-bezier(.2,.7,.4,1) var(--d) 1 forwards; }
+  .bos-confetti i:nth-child(3n) { width: 8px; height: 8px; border-radius: 99px; }
+  @keyframes bos-fall { 0% { opacity: 1; transform: translateY(0) rotate(var(--r)); } 85% { opacity: 1; } 100% { opacity: 0; transform: translateY(420px) rotate(calc(var(--r) + 540deg)); } }
+  @media (prefers-reduced-motion: reduce) { .bos-confetti { display: none; } }
+</style>

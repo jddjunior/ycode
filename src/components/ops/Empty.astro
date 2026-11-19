@@ -1,0 +1,20 @@
+---
+/** Teaching empty state: icon, benefit sentence, primary CTA, secondary learn link. */
+import Icon from '../Icon.astro';
+interface Props { icon: string; title: string; text: string; cta?: { href: string; label: string }; learn?: { href: string; label: string }; compact?: boolean }
+const { icon, title, text, cta, learn, compact = false } = Astro.props;
+---
+<div class:list={['text-center', compact ? 'px-5 py-8' : 'card p-10']}>
+  <span class="relative mx-auto grid place-items-center size-14 rounded-2xl bg-brand-soft text-brand">
+    <Icon name={icon} size={26} />
+    <span class="absolute -right-1.5 -top-1.5 size-4 rounded-full bg-sun border-2 border-white" aria-hidden="true"></span>
+  </span>
+  <h2 class:list={['font-bold mt-3', compact ? 'text-base' : 'text-lg']}>{title}</h2>
+  <p class="text-sm text-ink-2 mt-1 max-w-md mx-auto">{text}</p>
+  {(cta || learn) && (
+    <div class="mt-4 flex flex-wrap justify-center gap-2">
+      {cta && <a href={cta.href} class="btn-primary"><Icon name="plus" size={16} />{cta.label}</a>}
+      {learn && <a href={learn.href} class="btn-ghost">{learn.label}</a>}
+    </div>
+  )}
+</div>

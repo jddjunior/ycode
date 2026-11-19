@@ -1,0 +1,76 @@
+---
+import { and, eq, ne, sql } from 'drizzle-orm';
+import PlatformLayout from '../../layouts/PlatformLayout.astro';
+import Icon from '../../components/Icon.astro';
+import { getDb, schema } from '../../db/client';
+import { platformUrl } from '../../lib/tenant';
+
+const zipParam = (Astro.url.searchParams.get('zip') ?? '').trim();
+if (/^\d{5}$/.test(zipParam)) return Astro.redirect(`/find/${zipParam}`, 302);
+const bad = zipParam !== '';
+
+const db = await getDb();
+// Areas with at least one listed operator — links double as crawlable entry points.
+const areas = await db.select({ city: schema.tenants.city, state: schema.tenants.state, zip: schema.tenants.zip, n: sql<number>`count(*)::int` })
+  .from(schema.tenants).where(and(eq(schema.tenants.marketplaceListed, true), ne(schema.tenants.status, 'canceled')))
+  .groupBy(schema.tenants.city, schema.tenants.state, schema.tenants.zip).orderBy(sql`count(*) desc`).limit(24);
+const [stats] = await db.select({ ops: sql<number>`count(*)::int` }).from(schema.tenants).where(and(eq(schema.tenants.marketplaceListed, true), ne(schema.tenants.status, 'canceled')));
+const ld = [{ '@context': 'https://schema.org', '@type': 'WebSite', name: 'BounceOS — Find a bounce house rental', url: platformUrl() + '/find', potentialAction: { '@type': 'SearchAction', target: platformUrl() + '/find/{zip}', 'query-input': 'required name=zip' } }];
+---
+<PlatformLayout title="Find Bounce House & Water Slide Rentals Near You | BounceOS" description="Enter your ZIP to compare local bounce house, water slide and party rental companies that deliver to you. Request free quotes from up to 3 operators in one step." ld={ld}>
+  <section class="relative overflow-hidden bg-ink text-white">
+    <div class="absolute inset-0 opacity-40 [background:radial-gradient(60%_80%_at_80%_10%,#5B3CF5_0%,transparent_60%),radial-gradient(40%_60%_at_10%_90%,#FF5A1F_0%,transparent_60%)]" aria-hidden="true"></div>
+    <div class="relative max-w-5xl mx-auto px-4 py-16 sm:py-24">
+      <p class="chip bg-white/10 text-white">BounceOS Marketplace</p>
+      <h1 class="mt-4 text-4xl sm:text-6xl font-extrabold leading-[1.02] max-w-3xl text-white">Bounce houses, delivered to your&nbsp;yard.</h1>
+      <p class="mt-4 text-lg text-white/75 max-w-xl">Compare local, insured party rental companies that deliver to your ZIP — then get quotes from up to three in one step.</p>
+      <form method="get" action="/find" class="mt-8 flex max-w-lg gap-2" role="search">
+        <label class="sr-only" for="zip">Your ZIP code</label>
+        <input id="zip" name="zip" inputmode="numeric" autocomplete="postal-code" pattern="\d{5}" maxlength="5" required placeholder="Enter your ZIP" value={bad ? zipParam : ''} aria-invalid={bad ? 'true' : undefined} aria-describedby={bad ? 'zip-err' : undefined}
+          class="input min-h-14 text-lg bg-white text-ink rounded-2xl" />
+        <button class="btn-pop min-h-14 px-6 rounded-2xl text-base shrink-0"><Icon name="search" size={18} />Search</button>
+      </form>
+      {bad && <p id="zip-err" class="mt-2 text-sm text-sun">Please enter a 5-digit US ZIP code.</p>}
+      <ul class="mt-8 flex flex-wrap gap-x-6 gap-y-2 text-sm text-white/70">
+        <li class="flex items-center gap-2"><Icon name="shield" size={16} class="text-sun" />Insured local operators</li>
+        <li class="flex items-center gap-2"><Icon name="calendar" size={16} class="text-sun" />Live availability on their sites</li>
+        <li class="flex items-center gap-2"><Icon name="dollar" size={16} class="text-sun" />Free to use, no sign-up</li>
+      </ul>
+    </div>
+  </section>
+
+  <section class="max-w-5xl mx-auto px-4 py-14 grid gap-6 sm:grid-cols-3">
+    {[
+      { icon: 'map', t: 'Enter your ZIP', d: 'We only show companies whose delivery zones actually include your address.' },
+      { icon: 'star', t: 'Compare real reviews', d: 'See ratings, popular rentals and starting prices side by side.' },
+      { icon: 'message', t: 'Get quotes fast', d: 'One form reaches up to three operators. Most reply the same day.' },
+    ].map((s, i) => (
+      <div class="card p-6">
+        <span class="grid place-items-center size-11 rounded-2xl bg-brand-soft text-brand"><Icon name={s.icon} size={20} /></span>
+        <p class="mt-4 text-xs font-bold text-ink-2">STEP {i + 1}</p>
+        <h2 class="text-lg font-extrabold mt-1">{s.t}</h2>
+        <p class="text-sm text-ink-2 mt-1">{s.d}</p>
+      </div>
+    ))}
+  </section>
+
+  {areas.length > 0 && (
+    <section class="max-w-5xl mx-auto px-4 pb-6">
+      <h2 class="text-2xl font-extrabold">Popular areas</h2>
+      <p class="text-ink-2 text-sm mt-1">{stats.ops} rental compan{stats.ops === 1 ? 'y' : 'ies'} on BounceOS and growing.</p>
+      <ul class="mt-4 flex flex-wrap gap-2">
+        {areas.filter((a) => /^\d{5}$/.test(a.zip)).map((a) => <li><a class="chip bg-white border border-line text-ink py-2 px-4 text-sm hover:border-brand hover:text-brand" href={`/find/${a.zip}`}>Bounce house rentals in {a.city}, {a.state} <span class="text-ink-2 font-normal">({a.zip})</span></a></li>)}
+      </ul>
+    </section>
+  )}
+
+  <section class="max-w-5xl mx-auto px-4 py-12">
+    <div class="card p-6 sm:p-8 flex flex-wrap items-center gap-6 bg-brand-soft/50 border-brand/20">
+      <div class="flex-1 min-w-60">
+        <h2 class="text-2xl font-extrabold">Run a party rental company?</h2>
+        <p class="text-ink-2 mt-1">List free on the BounceOS marketplace. You only pay a fee on bookings we send you — never on your own customers.</p>
+      </div>
+      <a href="/signup" class="btn-primary">List my business</a>
+    </div>
+  </section>
+</PlatformLayout>

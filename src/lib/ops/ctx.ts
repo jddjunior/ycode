@@ -55,9 +55,9 @@ export const dateTime = (d: Date, tz: string) => formatLocal(d, tz, { weekday: '
 export const dateOnly = (d: Date, tz: string) => formatLocal(d, tz, { month: 'short', day: 'numeric', year: 'numeric' });
 
 export const STATUS: Record<string, { label: string; cls: string }> = {
-  hold: { label: 'Hold', cls: 'bg-sun/30 text-[#7A5200]' },
+  hold: { label: 'Hold', cls: 'bg-amber-100 text-amber-900' },
   quote: { label: 'Quote', cls: 'bg-sky-100 text-sky-800' },
-  pending: { label: 'Pending', cls: 'bg-amber-100 text-amber-800' },
+  pending: { label: 'Pending', cls: 'bg-orange-100 text-orange-800' },
   confirmed: { label: 'Confirmed', cls: 'bg-brand-soft text-brand' },
   completed: { label: 'Completed', cls: 'bg-green-100 text-green-800' },
   canceled: { label: 'Canceled', cls: 'bg-gray-100 text-gray-600' },
@@ -66,7 +66,7 @@ export const STATUS: Record<string, { label: string; cls: string }> = {
 export const STAGES = ['new', 'contacted', 'quoted', 'won', 'lost'] as const;
 export const STAGE_META: Record<string, { label: string; cls: string }> = {
   new: { label: 'New', cls: 'bg-sky-100 text-sky-800' },
-  contacted: { label: 'Contacted', cls: 'bg-amber-100 text-amber-800' },
+  contacted: { label: 'Contacted', cls: 'bg-orange-100 text-orange-800' },
   quoted: { label: 'Quoted', cls: 'bg-brand-soft text-brand' },
   won: { label: 'Won', cls: 'bg-green-100 text-green-800' },
   lost: { label: 'Lost', cls: 'bg-gray-100 text-gray-600' },

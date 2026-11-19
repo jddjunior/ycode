@@ -1,0 +1,42 @@
+---
+/**
+ * Success / next-step panel shown after a create, send, generate or publish.
+ * Pages render it when the PRG redirect carries ?done=… so the operator always
+ * sees what happened and the 2–3 most likely next moves.
+ */
+import Icon from '../Icon.astro';
+export interface NextAction { href: string; label: string; icon?: string; primary?: boolean; external?: boolean; download?: boolean }
+interface Props { title: string; text?: string; actions: NextAction[]; celebrate?: boolean; dismissHref?: string }
+const { title, text, actions, celebrate = true, dismissHref } = Astro.props;
+---
+<section class="g-next card relative overflow-hidden mb-6 border-brand/25" role="status" aria-live="polite" data-celebrate={celebrate ? '' : undefined}>
+  {celebrate && <div class="g-confetti" aria-hidden="true">{Array.from({ length: 14 }, (_, i) => <i style={`--i:${i}`}></i>)}</div>}
+  <div class="relative flex flex-wrap items-start gap-4 p-4 sm:p-5 bg-gradient-to-r from-brand-soft/80 via-white to-white">
+    <span class="g-pop grid place-items-center size-11 rounded-2xl bg-brand text-white shrink-0 shadow-[0_6px_16px_-6px_rgba(91,60,245,.6)]"><Icon name="check" size={22} /></span>
+    <div class="min-w-0 flex-1 basis-60">
+      <p class="font-[family-name:var(--font-display)] font-extrabold text-lg leading-tight">{title}</p>
+      {text && <p class="text-sm text-ink-2 mt-1">{text}</p>}
+      <p class="text-xs font-semibold uppercase tracking-wide text-ink-2 mt-3">Next steps</p>
+      <div class="mt-2 flex flex-wrap gap-2">
+        {actions.map((a) => (
+          <a href={a.href} class={a.primary ? 'btn-primary' : 'btn-ghost'} target={a.external ? '_blank' : undefined} rel={a.external ? 'noopener' : undefined} download={a.download ? '' : undefined}>
+            {a.icon && <Icon name={a.icon} size={16} />}{a.label}
+          </a>
+        ))}
+      </div>
+    </div>
+    {dismissHref && <a href={dismissHref} class="absolute right-3 top-3 grid place-items-center size-8 rounded-lg text-ink-2 hover:bg-white" aria-label="Dismiss"><Icon name="x" size={16} /></a>}
+  </div>
+</section>
+<style is:global>
+  .g-confetti { position: absolute; inset: 0; pointer-events: none; }
+  .g-confetti i { position: absolute; top: -10px; left: calc(6% + var(--i) * 6.6%); width: 7px; height: 12px; border-radius: 2px; opacity: 0;
+    background: var(--c, #5B3CF5); animation: g-fall 1.6s cubic-bezier(.2,.7,.4,1) calc(var(--i) * 45ms) 1 forwards; }
+  .g-confetti i:nth-child(3n) { --c: #FF5A1F; width: 9px; height: 9px; border-radius: 99px; }
+  .g-confetti i:nth-child(3n+1) { --c: #FFC928; }
+  .g-confetti i:nth-child(4n) { --c: #16A34A; }
+  @keyframes g-fall { 0% { opacity: 0; transform: translateY(0) rotate(0); } 15% { opacity: 1; } 100% { opacity: 0; transform: translateY(150px) rotate(320deg); } }
+  .g-pop { animation: g-pop .5s cubic-bezier(.3,1.6,.5,1) both; }
+  @keyframes g-pop { from { transform: scale(.4); opacity: 0; } to { transform: scale(1); opacity: 1; } }
+  @media (prefers-reduced-motion: reduce) { .g-confetti { display: none; } .g-pop { animation: none; } }
+</style>

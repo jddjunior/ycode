@@ -8,17 +8,18 @@ import { formData, str } from '../../../lib/forms';
 import { generateCaptions } from '../../../lib/ai';
 import { siteOrigin } from '../../../lib/tenant';
 import { localDay, addDays, formatLocal } from '../../../lib/time';
+import { itemPath } from '../../../lib/growth/blockdefs';
 import { NETWORKS, ADAPTERS, connectedNetworks, publishPost, type Network } from '../../../lib/growth/social';
 import { ctx, done, fmtDateTime, parseLocalDateTime, toLocalInput } from '../../../lib/growth/app';
 
 const { t, tenantId, canEdit } = ctx(Astro);
 const db = await getDb();
 const origin = await siteOrigin(t);
-const items = await db.select({ id: schema.items.id, name: schema.items.name, tagline: schema.items.tagline, images: schema.items.images, slug: schema.items.slug, isWet: schema.items.isWet, featured: schema.items.featured })
-  .from(schema.items).where(and(eq(schema.items.tenantId, tenantId), eq(schema.items.active, true))).orderBy(desc(schema.items.featured), asc(schema.items.sort), asc(schema.items.name));
+const items = (await db.select({ id: schema.items.id, name: schema.items.name, tagline: schema.items.tagline, images: schema.items.images, slug: schema.items.slug, kind: schema.items.kind, cat: schema.categories.slug, isWet: schema.items.isWet, featured: schema.items.featured })
+  .from(schema.items).leftJoin(schema.categories, eq(schema.categories.id, schema.items.categoryId)).where(and(eq(schema.items.tenantId, tenantId), eq(schema.items.active, true))).orderBy(desc(schema.items.featured), asc(schema.items.sort), asc(schema.items.name))).map((i) => ({ ...i, path: itemPath(i.kind, i.cat, i.slug) }));
 const itemById = new Map(items.map((i) => [i.id, i]));
 const OCCASIONS = ['weekend availability', 'birthday parties', 'school field day', 'church festival', 'summer water slide season', 'block party', 'corporate picnic', 'graduation party'];
-const linkFor = (itemSlug?: string, net = 'social') => `${origin}${itemSlug ? `/rentals/${itemSlug}` : '/'}?utm_source=${net}&utm_medium=organic_social`;
+const linkFor = (path?: string, net = 'social') => `${origin}${path ?? '/'}?utm_source=${net}&utm_medium=organic_social`;
 const netKeys = NETWORKS.map((n) => n.key) as [Network, ...Network[]];
 
 const Post = z.object({
@@ -43,7 +44,7 @@ if (f) {
     const item = itemById.get(itemId);
     const occasion = str(f, 'occasion', 60) || 'your next party';
     const tone = (['fun', 'helpful', 'urgent'] as const).find((x) => x === str(f, 'tone', 10)) ?? 'fun';
-    generated = await generateCaptions({ business: t.name, city: t.city, itemName: item?.name, itemTagline: item?.tagline || undefined, occasion, tone, link: linkFor(item?.slug) });
+    generated = await generateCaptions({ business: t.name, city: t.city, itemName: item?.name, itemTagline: item?.tagline || undefined, occasion, tone, link: linkFor(item?.path) });
     draft = { ...draft, itemId: item?.id ?? '', occasion, tone, caption: generated[0] ?? '', imageUrl: item?.images[0] ?? '' };
   } else if (action === 'save' || action === 'schedule') {
     const r = Post.safeParse({ caption: str(f, 'caption', 2200), networks: [...new Set(f.getAll('networks').map(String))], imageUrl: str(f, 'imageUrl', 500), itemId: str(f, 'itemId', 40) });
@@ -55,7 +56,7 @@ if (f) {
       if (!scheduledAt || scheduledAt.getTime() < Date.now() - 60_000) return done(Astro, 'Pick a time in the future to schedule.', undefined, 'error');
     }
     if (r.data.networks.includes('instagram') && !r.data.imageUrl) return done(Astro, 'Instagram posts need an image.', undefined, 'error');
-    await db.insert(schema.socialPosts).values({ tenantId, caption: r.data.caption, networks: r.data.networks, imageUrl: r.data.imageUrl || null, itemId: item?.id ?? null, link: linkFor(item?.slug), status: scheduledAt ? 'scheduled' : 'draft', scheduledAt });
+    await db.insert(schema.socialPosts).values({ tenantId, caption: r.data.caption, networks: r.data.networks, imageUrl: r.data.imageUrl || null, itemId: item?.id ?? null, link: linkFor(item?.path), status: scheduledAt ? 'scheduled' : 'draft', scheduledAt });
     return done(Astro, scheduledAt ? `Scheduled for ${fmtDateTime(scheduledAt, t.timezone)}.` : 'Saved as a draft.', '/app/social#queue');
   } else {
     const id = str(f, 'id', 40);

@@ -16,6 +16,7 @@ interface Props {
   items: CatalogItem[]; surfaces: { key: string; label: string; feeCents: number }[];
   waiverBps: number; waiverDefaultOn: boolean; agreementHtml: string; cancellationPolicy: string;
   holdMinutes: number; depositText: string; canceled?: boolean;
+  help?: { q: string; a: string }[];
 }
 interface Quote {
   lines: { itemId: string; name: string; qty: number; unitCents: number; totalCents: number }[];
@@ -261,6 +262,7 @@ export default function Checkout(p: Props) {
         {qLoading && <span class="text-xs font-bold s-sub">Updating…</span>}
       </div>
       {day && <p class="mt-1 text-sm font-bold">{prettyDay(day, true)} · {hourLabel(start)}–{hourLabel(endFixed)}{zipOk ? ` · ${zip}` : ''}</p>}
+      {step > 0 && <p class="mt-1 flex gap-4 text-sm"><button type="button" class="font-bold text-primary underline underline-offset-2 min-h-8" onClick={() => go(0)}>Edit date & ZIP</button>{step > 1 && <button type="button" class="font-bold text-primary underline underline-offset-2 min-h-8" onClick={() => go(1)}>Edit cart</button>}</p>}
       <ul class="mt-4 grid gap-3">
         {lines.map((l) => {
           const it = byId.get(l.itemId); if (!it) return null;
@@ -293,18 +295,49 @@ export default function Checkout(p: Props) {
       )}
       {!quote && lines.length > 0 && <p class="mt-4 text-sm s-sub">{!day || !zipOk ? 'Add your date and ZIP to see delivery, tax and your deposit.' : 'Calculating your total…'}</p>}
       <p class="mt-4 text-xs s-sub">{p.depositText}. {p.cancellationPolicy}</p>
+      {!!p.help?.length && (
+        <div class="mt-5 border-t border-line pt-4">
+          <p class="font-extrabold text-sm">Questions before you book?</p>
+          <div class="mt-1">
+            {p.help.map((h) => (
+              <details class="s-faq !border-line">
+                <summary class="!min-h-11 !py-2 !text-sm">{h.q}</summary>
+                <p class="!text-sm !pb-3">{h.a}</p>
+              </details>
+            ))}
+          </div>
+          {p.phone && (
+            <div class="mt-3 grid grid-cols-2 gap-2">
+              <a class="s-btn s-btn-ghost s-btn-sm" href={`sms:${p.phone.replace(/[^\d+]/g, '')}`}>Text us</a>
+              <a class="s-btn s-btn-ghost s-btn-sm" href={`tel:${p.phone.replace(/[^\d+]/g, '')}`}>Call {p.phone}</a>
+            </div>
+          )}
+        </div>
+      )}
     </aside>
   );
 
   const stepHeader = (
+    <>
+    <p class="text-sm font-extrabold s-sub mb-2" aria-live="polite">Step {step + 1} of {STEPS.length} · {STEPS[step]}</p>
     <ol class="grid grid-cols-6 gap-1.5 mb-6" aria-label="Checkout progress">
       {STEPS.map((s, i) => (
-        <li class="grid gap-1.5" aria-current={i === step ? 'step' : undefined}>
-          <span class={`h-2 rounded-full ${i <= step ? 'bg-primary' : 'bg-muted'}`} />
-          <span class={`text-[11px] sm:text-xs font-bold ${i === step ? '' : 's-sub'}`}>{s}</span>
+        <li aria-current={i === step ? 'step' : undefined}>
+          {i < step ? (
+            <button type="button" class="w-full grid gap-1.5 text-left min-h-11" onClick={() => go(i)} aria-label={`Back to ${s}`}>
+              <span class="h-2 rounded-full bg-primary" />
+              <span class="text-[11px] sm:text-xs font-bold underline underline-offset-2">{s}</span>
+            </button>
+          ) : (
+            <span class="grid gap-1.5 min-h-11">
+              <span class={`h-2 rounded-full ${i === step ? 'bg-primary' : 'bg-muted'}`} />
+              <span class={`text-[11px] sm:text-xs font-bold ${i === step ? '' : 's-sub'}`}>{s}</span>
+            </span>
+          )}
         </li>
       ))}
     </ol>
+    </>
   );
 
   let body;

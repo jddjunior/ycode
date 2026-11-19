@@ -1,0 +1,15 @@
+---
+/** Breadcrumbs for growth sub-pages. Last crumb is the current page. */
+interface Props { items: { label: string; href?: string }[] }
+const { items } = Astro.props;
+---
+<nav aria-label="Breadcrumb" class="mb-3 -mt-2">
+  <ol class="flex flex-wrap items-center gap-1 text-xs font-medium text-ink-2">
+    {items.map((c, i) => (
+      <li class="flex items-center gap-1">
+        {i > 0 && <span aria-hidden="true" class="text-ink-2/50">/</span>}
+        {c.href && i < items.length - 1 ? <a class="hover:text-brand underline-offset-2 hover:underline" href={c.href}>{c.label}</a> : <span aria-current="page" class="text-ink truncate max-w-[16rem]">{c.label}</span>}
+      </li>
+    ))}
+  </ol>
+</nav>

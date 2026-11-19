@@ -106,7 +106,11 @@ export const defFor = (type: string) => BLOCK_DEFS.find((d) => d.type === type);
 /** Public storefront path for a page (preview link). Mirrors the storefront route scheme. */
 export function pagePath(kind: string, slug: string): string {
   if (kind === 'city') return `/areas/${slug}`;
-  if (kind === 'post') return `/blog/${slug}`;
-  if (kind === 'landing') return `/l/${slug}`;
-  return slug ? `/${slug}` : '/';
+  return slug ? `/${slug}` : '/'; // pages, posts and landing pages share /{slug}
+}
+
+/** Storefront product URL: /rentals/{category}/{item}, packages under /rentals/packages/{item}. */
+export function itemPath(kind: string, categorySlug: string | null | undefined, slug: string): string {
+  if (kind === 'package') return `/rentals/packages/${slug}`;
+  return categorySlug ? `/rentals/${categorySlug}/${slug}` : '/rentals';
 }
