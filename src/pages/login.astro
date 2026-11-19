@@ -1,0 +1,46 @@
+---
+import { eq, sql } from 'drizzle-orm';
+import PlatformLayout from '../layouts/PlatformLayout.astro';
+import { getDb, schema } from '../db/client';
+import { verifyPassword, createSession } from '../lib/auth';
+import { formData, str, safeNext, isSecure, clientIp } from '../lib/forms';
+import { rateLimit } from '../lib/ratelimit';
+
+let error = '';
+const next = safeNext(Astro.url.searchParams.get('next'));
+if (Astro.locals.session?.tenant) return Astro.redirect(next);
+
+const f = await formData(Astro);
+if (f) {
+  const email = str(f, 'email', 200).toLowerCase();
+  const password = str(f, 'password', 200);
+  const ip = clientIp(Astro.request, Astro.clientAddress);
+  if (!rateLimit(`login:${ip}`, 10, 5) || !rateLimit(`login:${email}`, 8, 2)) {
+    error = 'Too many attempts. Please wait a minute and try again.';
+  } else {
+    const db = await getDb();
+    const [u] = await db.select().from(schema.users).where(sql`lower(${schema.users.email}) = ${email}`).limit(1);
+    // Always run a hash comparison to keep timing uniform.
+    const ok = await verifyPassword(password, u?.passwordHash ?? 'scrypt$32768$AAAAAAAAAAAAAAAAAAAAAA==$AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=');
+    if (u && ok) {
+      const [m] = await db.select().from(schema.memberships).where(eq(schema.memberships.userId, u.id)).limit(1);
+      await createSession(u.id, m?.tenantId ?? null, Astro.cookies, isSecure(Astro.url));
+      return Astro.redirect(u.isPlatformAdmin && !m ? '/hq' : m?.role === 'crew' ? '/app/crew' : next);
+    }
+    error = 'That email and password don’t match.';
+  }
+}
+---
+<PlatformLayout title="Sign in · BounceOS" noindex>
+  <section class="max-w-md mx-auto px-4 py-16">
+    <h1 class="text-3xl font-extrabold">Welcome back</h1>
+    <p class="text-ink-2 mt-2">Sign in to run your rental business.</p>
+    <form method="post" class="card p-6 mt-6 space-y-4">
+      {error && <p role="alert" class="rounded-lg bg-red-50 text-red-800 text-sm px-3 py-2">{error}</p>}
+      <div><label class="label" for="email">Email</label><input class="input" id="email" name="email" type="email" autocomplete="email" required /></div>
+      <div><label class="label" for="password">Password</label><input class="input" id="password" name="password" type="password" autocomplete="current-password" required /></div>
+      <button class="btn-primary w-full">Sign in</button>
+      <p class="text-sm text-ink-2 text-center">New to BounceOS? <a class="text-brand font-semibold" href="/signup">Start your free trial</a></p>
+    </form>
+  </section>
+</PlatformLayout>

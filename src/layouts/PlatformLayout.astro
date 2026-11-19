@@ -1,0 +1,69 @@
+---
+/** Public BounceOS / Branch Avenue HQ marketing + auth pages. */
+import '../styles/app.css';
+import { jsonLd } from '../lib/util';
+import { platformUrl } from '../lib/tenant';
+interface Props { title: string; description?: string; noindex?: boolean; bare?: boolean; ld?: object[] }
+const { title, description = 'BounceOS by Branch Avenue HQ: the all-in-one operating system for bounce house & party rental businesses — booking, inventory, SEO websites, marketing, ads and revenue share.', noindex = false, bare = false, ld = [] } = Astro.props;
+const canonical = platformUrl() + Astro.url.pathname;
+const session = Astro.locals.session;
+---
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>{title}</title>
+  <meta name="description" content={description} />
+  <link rel="canonical" href={canonical} />
+  {noindex && <meta name="robots" content="noindex" />}
+  <meta property="og:title" content={title} />
+  <meta property="og:description" content={description} />
+  <meta property="og:type" content="website" />
+  <meta property="og:url" content={canonical} />
+  <meta property="og:image" content={platformUrl() + '/demo/og.svg'} />
+  <meta name="theme-color" content="#13122B" />
+  <link rel="icon" href="/favicon.svg" type="image/svg+xml" />
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=Inter+Tight:wght@700;800&display=swap" rel="stylesheet" />
+  {ld.map((o) => <script type="application/ld+json" set:html={jsonLd(o)} />)}
+</head>
+<body class="bg-white">
+  {!bare && (
+    <header class="sticky top-0 z-40 bg-white/90 backdrop-blur border-b border-line">
+      <div class="max-w-6xl mx-auto px-4 h-16 flex items-center gap-6">
+        <a href="/" class="flex items-center gap-2.5">
+          <span class="grid place-items-center size-8 rounded-lg bg-pop text-[#1B1F4A] font-black">B</span>
+          <span class="font-[family-name:var(--font-display)] font-extrabold text-lg tracking-tight">BounceOS</span>
+        </a>
+        <nav class="hidden md:flex items-center gap-5 text-sm font-medium text-ink-2" aria-label="Main">
+          <a href="/#features" class="hover:text-ink">Features</a>
+          <a href="/pricing" class="hover:text-ink">Pricing</a>
+          <a href="/compare" class="hover:text-ink">Compare</a>
+          <a href="/find" class="hover:text-ink">Find a rental</a>
+        </nav>
+        <div class="ml-auto flex items-center gap-2">
+          {session ? <a href="/app" class="btn-primary">Open dashboard</a> : <>
+            <a href="/login" class="btn-ghost">Sign in</a>
+            <a href="/signup" class="btn-primary">Start free</a>
+          </>}
+        </div>
+      </div>
+    </header>
+  )}
+  <main id="main"><slot /></main>
+  {!bare && (
+    <footer class="border-t border-line bg-canvas mt-20">
+      <div class="max-w-6xl mx-auto px-4 py-10 grid gap-6 sm:grid-cols-3 text-sm text-ink-2">
+        <div>
+          <p class="font-bold text-ink">BounceOS by Branch Avenue HQ</p>
+          <p class="mt-2">Making party rental businesses easier to run, more fun to grow, and better at marketing.</p>
+        </div>
+        <div class="flex flex-col gap-1.5"><a href="/pricing">Pricing</a><a href="/compare">Compare software</a><a href="/find">Find a local rental</a></div>
+        <div class="flex flex-col gap-1.5"><a href="/signup">Start free trial</a><a href="/login">Operator sign in</a><span>© {new Date().getFullYear()} Branch Avenue HQ</span></div>
+      </div>
+    </footer>
+  )}
+</body>
+</html>

@@ -1,0 +1,48 @@
+@import "tailwindcss";
+
+/* BounceOS operator app + platform design tokens (Branch Avenue HQ). */
+@theme {
+  --color-brand: #5B3CF5;
+  --color-brand-ink: #ffffff;
+  --color-brand-soft: #EEEAFE;
+  --color-pop: #FF5A1F;
+  --color-sun: #FFC928;
+  --color-mint: #16A34A;
+  --color-ink: #13122B;
+  --color-ink-2: #4A4866;
+  --color-line: #E6E4EF;
+  --color-canvas: #F7F6FB;
+  --color-danger: #DC2626;
+  --color-warn: #B45309;
+  --font-sans: 'Inter', ui-sans-serif, system-ui, -apple-system, 'Segoe UI', sans-serif;
+  --font-display: 'Inter Tight', 'Inter', ui-sans-serif, system-ui, sans-serif;
+}
+
+@layer base {
+  html { -webkit-text-size-adjust: 100%; }
+  body { background: var(--color-canvas); color: var(--color-ink); font-family: var(--font-sans); }
+  :focus-visible { outline: 3px solid color-mix(in srgb, var(--color-brand) 55%, transparent); outline-offset: 2px; }
+  h1, h2, h3 { font-family: var(--font-display); letter-spacing: -0.015em; }
+}
+
+@utility card { @apply bg-white rounded-2xl border border-line shadow-[0_1px_2px_rgba(19,18,43,.04)]; }
+@utility btn { @apply inline-flex items-center justify-center gap-2 rounded-xl px-4 min-h-11 text-sm font-semibold transition-colors disabled:opacity-50 cursor-pointer; }
+@utility btn-primary { @apply btn bg-brand text-brand-ink hover:bg-[#4A2DE0]; }
+@utility btn-ghost { @apply btn bg-white border border-line text-ink hover:bg-canvas; }
+@utility btn-pop { @apply btn bg-pop text-[#1B1F4A] hover:brightness-95; }
+@utility btn-danger { @apply btn bg-white border border-red-200 text-danger hover:bg-red-50; }
+@utility input { @apply w-full rounded-xl border border-line bg-white px-3 min-h-11 text-sm text-ink placeholder:text-ink-2/60 focus:border-brand focus:outline-none focus:ring-2 focus:ring-brand/20; }
+@layer components { textarea.input { @apply py-2.5 min-h-24; } }
+@utility label { @apply block text-sm font-medium text-ink mb-1.5; }
+@utility hint { @apply text-xs text-ink-2 mt-1; }
+@utility chip { @apply inline-flex items-center gap-1 rounded-full px-2.5 py-0.5 text-xs font-semibold; }
+@utility table { @apply w-full text-sm; }
+@layer components { .table th { @apply text-left font-semibold text-ink-2 text-xs uppercase tracking-wide px-4 py-2.5 border-b border-line bg-canvas/60; } }
+@layer components { .table td { @apply px-4 py-3 border-b border-line align-middle; } }
+@layer components { .table tr:last-child td { @apply border-b-0; } }
+@utility kpi { @apply card p-4; }
+@utility kpi-label { @apply text-xs font-semibold uppercase tracking-wide text-ink-2; }
+@utility kpi-value { @apply text-2xl font-bold mt-1 tabular-nums font-[family-name:var(--font-display)]; }
+@layer components { .prose-app h2 { @apply text-lg font-bold mt-4 mb-2; } }
+@layer components { .prose-app p, .prose-app li { @apply text-sm text-ink-2 leading-relaxed; } }
+@layer components { .prose-app ul { @apply list-disc pl-5 space-y-1; } }

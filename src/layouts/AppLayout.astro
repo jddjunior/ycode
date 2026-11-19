@@ -1,0 +1,123 @@
+---
+/**
+ * Operator app shell. Every /app page renders inside this.
+ * Props: title (page H1 + <title>), section (nav key), actions slot for header buttons.
+ */
+import '../styles/app.css';
+import Icon from '../components/Icon.astro';
+import { readFlash } from '../lib/forms';
+import { siteOrigin } from '../lib/tenant';
+
+interface Props { title: string; section?: string; subtitle?: string; wide?: boolean }
+const { title, section = '', subtitle, wide = false } = Astro.props;
+const s = Astro.locals.session!;
+const t = s.tenant!;
+const flash = readFlash(Astro.cookies);
+const siteUrl = await siteOrigin(t);
+
+const groups: { label: string; items: { key: string; href: string; label: string; icon: string }[] }[] = [
+  { label: 'Run', items: [
+    { key: 'home', href: '/app', label: 'Game Plan', icon: 'home' },
+    { key: 'bookings', href: '/app/bookings', label: 'Bookings', icon: 'calendar' },
+    { key: 'inventory', href: '/app/inventory', label: 'Inventory', icon: 'box' },
+    { key: 'customers', href: '/app/customers', label: 'Customers & Leads', icon: 'users' },
+    { key: 'deliveries', href: '/app/deliveries', label: 'Deliveries', icon: 'truck' },
+  ] },
+  { label: 'Grow', items: [
+    { key: 'website', href: '/app/website', label: 'Website', icon: 'globe' },
+    { key: 'seo', href: '/app/seo', label: 'SEO', icon: 'search' },
+    { key: 'marketing', href: '/app/marketing', label: 'Campaigns & Reviews', icon: 'megaphone' },
+    { key: 'social', href: '/app/social', label: 'Social Studio', icon: 'share' },
+    { key: 'ads', href: '/app/ads', label: 'Ads', icon: 'target' },
+    { key: 'growth', href: '/app/growth', label: 'Referrals & Partners', icon: 'gift' },
+  ] },
+  { label: 'Business', items: [
+    { key: 'reports', href: '/app/reports', label: 'Reports', icon: 'chart' },
+    { key: 'settings', href: '/app/settings', label: 'Settings', icon: 'cog' },
+  ] },
+];
+const trialDays = t.status === 'trial' && t.trialEndsAt ? Math.max(0, Math.ceil((t.trialEndsAt.getTime() - Date.now()) / 86_400_000)) : null;
+---
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <meta name="robots" content="noindex, nofollow" />
+  <title>{title} · {t.name} · BounceOS</title>
+  <link rel="icon" href="/favicon.svg" type="image/svg+xml" />
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=Inter+Tight:wght@700;800&display=swap" rel="stylesheet" />
+</head>
+<body class="min-h-screen">
+  <a href="#main" class="sr-only focus:not-sr-only focus:absolute focus:top-2 focus:left-2 btn-primary z-50">Skip to content</a>
+  <div class="lg:grid lg:grid-cols-[248px_1fr] min-h-screen">
+    <aside id="sidenav" class="hidden lg:flex flex-col bg-ink text-white/80 sticky top-0 h-screen overflow-y-auto">
+      <a href="/app" class="flex items-center gap-2.5 px-5 h-16 shrink-0">
+        <span class="grid place-items-center size-8 rounded-lg bg-pop text-[#1B1F4A] font-black">B</span>
+        <span class="font-[family-name:var(--font-display)] font-extrabold text-white text-lg tracking-tight">BounceOS</span>
+      </a>
+      <nav class="px-3 pb-6 flex-1" aria-label="Main">
+        {groups.map((g) => (
+          <div class="mt-4">
+            <p class="px-3 text-[11px] font-semibold uppercase tracking-wider text-white/40">{g.label}</p>
+            <ul class="mt-1 space-y-0.5">
+              {g.items.map((i) => (
+                <li><a href={i.href} aria-current={section === i.key ? 'page' : undefined}
+                  class:list={['flex items-center gap-3 rounded-lg px-3 py-2 text-sm font-medium transition-colors', section === i.key ? 'bg-white/12 text-white' : 'hover:bg-white/6 hover:text-white']}>
+                  <Icon name={i.icon} size={18} />{i.label}</a></li>
+              ))}
+            </ul>
+          </div>
+        ))}
+      </nav>
+      <div class="p-4 border-t border-white/10 text-xs space-y-2">
+        <a href={siteUrl} target="_blank" rel="noopener" class="flex items-center gap-2 text-white/70 hover:text-white"><Icon name="external" size={14} />View my website</a>
+        <a href="/app/crew" class="flex items-center gap-2 text-white/70 hover:text-white"><Icon name="truck" size={14} />Crew app</a>
+        <form method="post" action="/logout"><button class="flex items-center gap-2 text-white/70 hover:text-white cursor-pointer"><Icon name="logout" size={14} />Sign out</button></form>
+      </div>
+    </aside>
+
+    <div class="min-w-0">
+      <header class="sticky top-0 z-30 bg-white/90 backdrop-blur border-b border-line">
+        <div class="flex items-center gap-3 px-4 lg:px-8 h-16">
+          <details class="lg:hidden relative">
+            <summary class="list-none btn-ghost px-3" aria-label="Menu"><Icon name="menu" /></summary>
+            <nav class="absolute left-0 top-12 w-64 card p-2 max-h-[75vh] overflow-y-auto shadow-xl" aria-label="Mobile">
+              {groups.flatMap((g) => g.items).map((i) => (
+                <a href={i.href} class:list={['flex items-center gap-3 rounded-lg px-3 py-2.5 text-sm', section === i.key ? 'bg-brand-soft text-brand font-semibold' : 'hover:bg-canvas']}><Icon name={i.icon} size={18} />{i.label}</a>
+              ))}
+              <a href="/app/crew" class="flex items-center gap-3 rounded-lg px-3 py-2.5 text-sm hover:bg-canvas"><Icon name="truck" size={18} />Crew app</a>
+            </nav>
+          </details>
+          <div class="min-w-0">
+            <p class="text-xs text-ink-2 truncate">{t.name}</p>
+            <p class="text-sm font-semibold truncate">{s.user.name || s.user.email}</p>
+          </div>
+          <div class="ml-auto flex items-center gap-2">
+            {trialDays !== null && <a href="/app/settings/billing" class="hidden sm:inline-flex chip bg-sun/30 text-[#7A5200]">Trial · {trialDays} days left</a>}
+            <a href="/app/bookings/new" class="btn-primary"><Icon name="plus" size={16} /><span class="hidden sm:inline">New booking</span></a>
+          </div>
+        </div>
+      </header>
+
+      <main id="main" class:list={['px-4 lg:px-8 py-6 lg:py-8 mx-auto', wide ? 'max-w-[1400px]' : 'max-w-6xl']}>
+        {flash && (
+          <div role="status" class:list={['mb-5 rounded-xl px-4 py-3 text-sm font-medium flex items-center gap-2', flash.kind === 'ok' ? 'bg-green-50 text-green-800 border border-green-200' : 'bg-red-50 text-red-800 border border-red-200']}>
+            <Icon name={flash.kind === 'ok' ? 'check' : 'x'} size={16} />{flash.msg}
+          </div>
+        )}
+        <div class="flex flex-wrap items-end gap-3 mb-6">
+          <div class="min-w-0">
+            <h1 class="text-2xl lg:text-3xl font-extrabold">{title}</h1>
+            {subtitle && <p class="text-ink-2 mt-1 text-sm">{subtitle}</p>}
+          </div>
+          <div class="ml-auto flex flex-wrap gap-2"><slot name="actions" /></div>
+        </div>
+        <slot />
+      </main>
+    </div>
+  </div>
+</body>
+</html>
