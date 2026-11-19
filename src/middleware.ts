@@ -15,6 +15,8 @@ export const onRequest = defineMiddleware(async (ctx, next) => {
     if (!PASSTHROUGH.test(path)) {
       const t = await tenantByHost(host);
       if (t) {
+        const to = redirectFor(t, path);
+        if (to) return ctx.redirect(to, 301);
         ctx.locals.site = { tenant: t, base: '' };
         const target = `/sites/${t.slug}${path === '/' ? '' : path}${url.search}`;
         return withHeaders(await ctx.rewrite(target), true);
@@ -24,7 +26,12 @@ export const onRequest = defineMiddleware(async (ctx, next) => {
     const m = /^\/sites\/([a-z0-9-]+)(\/|$)/.exec(path);
     if (m) {
       const t = await tenantBySlug(m[1]);
-      if (t) ctx.locals.site = { tenant: t, base: `/sites/${t.slug}` };
+      if (t) {
+        const base = `/sites/${t.slug}`;
+        const to = redirectFor(t, path.slice(base.length) || '/');
+        if (to) return ctx.redirect(to.startsWith('/') ? base + to : to, 301);
+        ctx.locals.site = { tenant: t, base };
+      }
     }
   }
 
@@ -62,4 +69,16 @@ function withHeaders(res: Response, isSite: boolean, isPrivate = false): Respons
     if (isPrivate) h.set('cache-control', 'private, no-store');
   } catch { /* immutable headers (e.g. redirects from fetch) */ }
   return res;
+}
+
+/** Operator-managed 301s (settings.redirects) — preserves rankings after migrating from old software. */
+function redirectFor(t: { settings: unknown }, path: string): string | null {
+  const list = (t.settings as { redirects?: { from: string; to: string }[] })?.redirects;
+  if (!Array.isArray(list) || !list.length) return null;
+  const norm = (p: string) => (p.length > 1 ? p.replace(/\/+$/, '') : p).toLowerCase();
+  const hit = list.find((r) => typeof r?.from === 'string' && norm(r.from) === norm(path));
+  if (!hit || typeof hit.to !== 'string') return null;
+  // Only same-site paths or absolute http(s) URLs; never loop to itself.
+  if (!/^(\/(?!\/)|https?:\/\/)/.test(hit.to) || norm(hit.to) === norm(path)) return null;
+  return hit.to;
 }

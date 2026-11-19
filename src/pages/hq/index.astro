@@ -66,7 +66,7 @@ const ledgerTotal = ledger.filter((l) => !['referral_commission', 'partner_refer
     </section>
   </div>
 
-  <div class="grid gap-6 lg:grid-cols-3">
+  <div class="grid gap-6 lg:grid-cols-3 items-start">
     <section class="card p-4" aria-labelledby="cities-h">
       <h2 id="cities-h" class="font-bold">Top cities by GMV</h2>
       {cities.length === 0 ? <p class="text-sm text-ink-2 mt-3">No bookings yet.</p> : (
@@ -75,17 +75,17 @@ const ledgerTotal = ledger.filter((l) => !['referral_commission', 'partner_refer
             <li>
               <div class="flex justify-between text-sm"><span class="font-medium truncate">{i + 1}. {c.city}{c.state ? `, ${c.state}` : ''}</span><span class="tabular-nums font-semibold">{money(Number(c.gmv))}</span></div>
               <div class="mt-1 h-1.5 rounded-full bg-canvas"><div class="h-full rounded-full bg-pop" style={`width:${(Number(c.gmv) / maxCity) * 100}%`}></div></div>
-              <p class="text-xs text-ink-2">{c.n} bookings · {c.tenants} operator{c.tenants === 1 ? '' : 's'}</p>
+              <p class="text-xs text-ink-2">{c.n} booking{c.n === 1 ? '' : 's'} · {c.tenants} operator{c.tenants === 1 ? '' : 's'}</p>
             </li>
           ))}
         </ol>
       )}
     </section>
     <section class="card p-4" aria-labelledby="su-h">
-      <h2 id="su-h" class="font-bold">New tenants by week</h2>
+      <h2 id="su-h" class="font-bold">New tenants by week</h2><p class="text-xs text-ink-2">Last 8 weeks · {weeks.reduce((a, w) => a + w.n, 0)} signups</p>
       <div class="mt-4 flex items-end gap-2 h-36" role="img" aria-label={`Signups per week: ${weeks.map((w) => `${w.wk} ${w.n}`).join(', ')}`}>
-        {weeks.length === 0 ? <p class="text-sm text-ink-2">No signups in 8 weeks.</p> : weeks.map((w) => (
-          <div class="flex-1 flex flex-col items-center gap-1 h-full justify-end"><span class="text-xs font-semibold tabular-nums">{w.n}</span><div class="w-full rounded-t-lg bg-brand" style={`height:${(w.n / maxWeek) * 100}%`}></div><span class="text-[10px] text-ink-2 whitespace-nowrap">{w.wk}</span></div>
+        {weeks.map((w) => (
+          <div class="flex-1 flex flex-col items-center gap-1 h-full justify-end"><span class="text-xs font-semibold tabular-nums">{w.n}</span><div class:list={['w-full max-w-10 rounded-t-lg', w.n ? 'bg-brand' : 'bg-line']} style={`height:${w.n ? Math.max(6, (w.n / maxWeek) * 100) : 3}%`}></div><span class="text-[10px] text-ink-2 whitespace-nowrap">{w.wk}</span></div>
         ))}
       </div>
     </section>

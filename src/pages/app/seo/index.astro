@@ -146,22 +146,23 @@ const redirectsText = (settings.redirects ?? []).map((r) => `${r.from} ${r.to}`)
     <div class="kpi"><p class="kpi-label">GBP checklist</p><p class="kpi-value">{gbpDone.size}<span class="text-sm text-ink-2 font-medium">/{GBP.length}</span></p></div>
   </div>
 
-  <section id="pages" class="card overflow-hidden mb-6 scroll-mt-24" aria-labelledby="scores-h">
+  <section id="pages" class="card overflow-hidden mb-6 scroll-mt-24 group/scores" aria-labelledby="scores-h">
     <div class="px-4 py-3 border-b border-line flex flex-wrap items-center gap-2">
       <h2 id="scores-h" class="font-bold">Page scores</h2>
       <p class="text-xs text-ink-2">Lowest first. Estimated from your page content; the live page also includes rentals and reviews.</p>
     </div>
     <ul class="divide-y divide-line">
-      {scored.map(({ p, s }) => {
+      {scored.map(({ p, s }, idx) => {
         const fails = s.checks.filter((c) => !c.ok);
         return (
-          <li>
+          <li class:list={[idx >= 8 && 'hidden group-has-[#all-scores:checked]/scores:block']}>
             <details class="group">
               <summary class="flex items-center gap-3 px-4 py-3 cursor-pointer list-none">
                 <span class:list={['grid place-items-center size-11 rounded-xl font-bold tabular-nums shrink-0', scoreTone(s.score)]} aria-label={`Score ${s.score} out of 100`}>{s.score}</span>
                 <span class="min-w-0 flex-1">
                   <span class="block font-semibold truncate">{p.title}</span>
-                  <span class="block text-xs text-ink-2 truncate">{pagePath(p.kind, p.slug)} · {fails.length ? `${fails.length} to fix` : 'All checks pass'}{p.status === 'draft' ? ' · draft' : ''}</span>
+                  <span class="block text-xs text-ink-2 truncate">{pagePath(p.kind, p.slug)}{p.status === 'draft' ? ' · draft' : ''}</span>
+                  <span class="mt-1 flex flex-wrap gap-1">{fails.length ? fails.slice(0, 3).map((c) => <span class="chip bg-red-50 text-red-800 font-medium">{c.label.replace(/^At least /, '').replace(/ of unique content/, '')}</span>) : <span class="chip bg-green-50 text-green-800">All checks pass</span>}</span>
                 </span>
                 <Icon name="arrow" size={16} class="text-ink-2 transition-transform group-open:rotate-90 shrink-0" />
               </summary>
@@ -188,6 +189,7 @@ const redirectsText = (settings.redirects ?? []).map((r) => `${r.from} ${r.to}`)
         );
       })}
     </ul>
+    {scored.length > 8 && <label class="flex items-center justify-center gap-2 px-4 py-3 border-t border-line text-sm font-semibold text-brand cursor-pointer hover:bg-canvas has-[:focus-visible]:ring-2 has-[:focus-visible]:ring-brand/40"><input type="checkbox" id="all-scores" class="sr-only peer" /><span class="peer-checked:hidden">Show all {scored.length} pages</span><span class="hidden peer-checked:inline">Show fewer</span></label>}
   </section>
 
   <div class="grid gap-6 lg:grid-cols-2 mb-6">
@@ -272,7 +274,7 @@ const redirectsText = (settings.redirects ?? []).map((r) => `${r.from} ${r.to}`)
           <li>Point your domain at BounceOS and verify it in Settings → Domain. Redirects go live as permanent 301s.</li>
           <li>Resubmit the sitemap in Google Search Console and watch Coverage for two weeks. Migrate in the off-season (Oct–Feb) if you can.</li>
         </ol>
-        <p>Want us to do it? Every plan includes a free assisted migration — <a class="text-brand font-semibold" href="mailto:migrations@branchavenue.com">migrations@branchavenue.com</a>.</p>
+        <p>Want us to do it? Branch Avenue offers assisted migrations — ask your account contact.</p>
       </div>
       <form method="post" class="mt-4 space-y-3">
         <input type="hidden" name="_action" value="redirects" />

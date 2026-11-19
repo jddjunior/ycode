@@ -103,8 +103,8 @@ const smsLen = values.body.length + 25;
       actions={[{ href: '/app/marketing', label: 'Back to campaigns', icon: 'megaphone', primary: true }, { href: `/app/social?occasion=${encodeURIComponent('weekend availability')}`, label: 'Schedule a matching social post', icon: 'share' }]} />
   )}
 
-  <div class="grid gap-6 lg:grid-cols-[1fr_360px]">
-    <form method="post" class="card p-4 sm:p-6 space-y-4" novalidate>
+  <div class="grid gap-6 grid-cols-[minmax(0,1fr)] lg:grid-cols-[minmax(0,1fr)_360px]">
+    <form method="post" class="card p-4 sm:p-6 space-y-4 min-w-0" novalidate>
       <div><label class="label" for="name">Name <span class="font-normal text-ink-2">(only you see this)</span></label><input class="input" id="name" name="name" value={values.name} required maxlength="100" disabled={locked} {...invalid(errors, 'name')} />{errors.name && <p id="name-err" class="g-err">{errors.name}</p>}</div>
       {!isAuto && (
         <div class="grid gap-3 sm:grid-cols-[1fr_140px]">
@@ -132,7 +132,7 @@ const smsLen = values.body.length + 25;
           <button class="btn-ghost" name="_action" value="save" data-busy="Saving…">Save</button>
           {!isAuto && <>
             <button class="btn-primary" name="_action" value="send" data-confirm={`Send to ${recipients.length} opted-in customer${recipients.length === 1 ? '' : 's'} now? This can’t be undone.`} data-busy="Sending…" disabled={!recipients.length}><Icon name="bolt" size={16} />Send now · {recipients.length}</button>
-            <div class="sm:ml-auto flex items-end gap-2">
+            <div class="sm:ml-auto flex flex-wrap items-end gap-2">
               <div><label class="label text-xs" for="scheduledAt">Or send at</label><input class="input w-auto" type="datetime-local" id="scheduledAt" name="scheduledAt" value={values.scheduledAt} {...invalid(errors, 'scheduledAt')} /></div>
               <button class="btn-ghost" name="_action" value="schedule" data-busy="Scheduling…"><Icon name="clock" size={16} />Schedule</button>
             </div>

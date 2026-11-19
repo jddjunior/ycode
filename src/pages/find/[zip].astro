@@ -74,6 +74,7 @@ const cityName = ops[0]?.tenant.zip === zip ? ops[0].tenant.city : null;
         <input id="zip" name="zip" inputmode="numeric" pattern="\d{5}" maxlength="5" value={zip} class="input bg-white text-ink" />
         <button class="btn-pop shrink-0">Update</button>
       </form>
+      <a href="#quote-h" class="lg:hidden mt-4 inline-flex items-center gap-2 text-sm font-semibold text-sun underline underline-offset-4">Skip the browsing — get free quotes ↓</a>
     </div>
   </section>
 
@@ -128,7 +129,7 @@ const cityName = ops[0]?.tenant.zip === zip ? ops[0].tenant.city : null;
 
     <aside>
       <form method="post" class="card p-5 space-y-3 lg:sticky lg:top-20" aria-labelledby="quote-h" novalidate>
-        <h2 id="quote-h" class="text-xl font-extrabold">Get free quotes</h2>
+        <h2 id="quote-h" class="text-xl font-extrabold scroll-mt-24">Get free quotes</h2>
         <p class="text-sm text-ink-2 -mt-1">One form, up to {Math.min(3, Math.max(ops.length, 1))} local operator{Math.min(3, ops.length) === 1 ? '' : 's'}. No spam, no account.</p>
         {errors._ && <p role="alert" class="rounded-lg bg-red-50 text-red-800 text-sm px-3 py-2">{errors._}</p>}
         <div class="hidden" aria-hidden="true"><label for="website">Website</label><input id="website" name="website" tabindex="-1" autocomplete="off" /></div>

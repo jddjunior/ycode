@@ -132,7 +132,7 @@ const deletedPath = doneKey === 'deleted' ? (Astro.url.searchParams.get('path') 
     <li>Edit blocks visually: add, reorder and remove sections, then Save.</li>
   </Guide>
 
-  <div class="grid gap-3 grid-cols-2 lg:grid-cols-4 mb-6">
+  <div class="hidden sm:grid gap-3 grid-cols-2 lg:grid-cols-4 mb-6">
     {KINDS.map((k) => (
       <a href={`/app/website?kind=${k}`} class:list={['kpi hover:border-brand transition-colors', kindFilter === k && 'ring-2 ring-brand']}>
         <p class="kpi-label">{KIND_LABEL[k]}s</p>
@@ -167,7 +167,7 @@ const deletedPath = doneKey === 'deleted' ? (Astro.url.searchParams.get('path') 
                   <p class="text-xs text-ink-2 truncate">{KIND_LABEL[p.kind]} · <span class="font-mono">{path}</span> · {p.n} block{p.n === 1 ? '' : 's'} · {fmtDay(p.updatedAt, t.timezone)}</p>
                 </div>
                 <span class:list={['chip', p.status === 'published' ? 'bg-green-50 text-green-800' : 'bg-sun/30 text-[#7A5200]']}>{p.status === 'published' ? 'Live' : 'Draft'}</span>
-                <div class="flex flex-wrap gap-1.5">
+                <div class="flex flex-wrap gap-1.5 pl-12 sm:pl-0">
                   <a class="btn-ghost min-h-9 px-3 text-xs" href={`/app/website/pages/${p.id}`}>Edit</a>
                   <a class="btn-ghost min-h-9 px-3 text-xs" href={origin + path} target="_blank" rel="noopener" aria-label={`Preview ${p.title}`}><Icon name="external" size={14} /></a>
                   {canEdit && (p.status === 'draft'

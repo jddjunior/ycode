@@ -11,7 +11,7 @@ import { getDb, schema } from '../../../db/client';
 import { formData, str } from '../../../lib/forms';
 import { generateCaptions } from '../../../lib/ai';
 import { siteOrigin } from '../../../lib/tenant';
-import { localDay, addDays, formatLocal } from '../../../lib/time';
+import { localDay, addDays, formatLocal, zonedToUtc } from '../../../lib/time';
 import { itemPath } from '../../../lib/growth/blockdefs';
 import { NETWORKS, ADAPTERS, connectedNetworks, publishPost, type Network } from '../../../lib/growth/social';
 import { ctx, done, go, invalid, fmtDateTime, parseLocalDateTime, toLocalInput } from '../../../lib/growth/app';
@@ -133,7 +133,9 @@ const ideas = [
 ];
 const connected = connectedNetworks(t);
 const imageChoices = [...new Set(items.flatMap((i) => i.images.slice(0, 1)))].slice(0, 12);
-const defaultAt = scheduleValue || toLocalInput(new Date(new Date(nextSat + 'T15:00:00Z').getTime() - 2 * 86_400_000), t.timezone);
+// Default: Wednesday 7pm before the next weekend (parents plan midweek); never in the past.
+const midweek = zonedToUtc(addDays(nextSat, -3), 19, 0, t.timezone);
+const defaultAt = scheduleValue || toLocalInput(midweek.getTime() > Date.now() + 3_600_000 ? midweek : zonedToUtc(addDays(today, 1), 19, 0, t.timezone), t.timezone);
 const doneKey = Astro.url.searchParams.get('done');
 const doneId = Astro.url.searchParams.get('id') ?? '';
 const [donePost] = z.uuid().safeParse(doneId).success ? await db.select().from(schema.socialPosts).where(and(eq(schema.socialPosts.id, doneId), eq(schema.socialPosts.tenantId, tenantId))).limit(1) : [];
@@ -160,7 +162,7 @@ const netLabel = (n: string) => NETWORKS.find((x) => x.key === n)?.label ?? n;
     <div class="space-y-6 min-w-0">
       <section id="compose" class="card p-4 sm:p-6 scroll-mt-24" aria-labelledby="compose-h">
         <h2 id="compose-h" class="font-bold text-lg">Compose</h2>
-        <form method="post" class="mt-3 grid gap-3 sm:grid-cols-[1fr_1fr_120px_auto] items-end">
+        <form method="post" class="mt-3 grid gap-3 sm:grid-cols-2 2xl:grid-cols-[1.3fr_1fr_110px_auto] items-end">
           <input type="hidden" name="_action" value="generate" />
           <div><label class="label" for="g-item">Rental</label>
             <select class="input" id="g-item" name="itemId"><option value="">Any / general</option>{items.map((i) => <option value={i.id} selected={draft.itemId === i.id}>{i.name}</option>)}</select></div>
@@ -182,41 +184,45 @@ const netLabel = (n: string) => NETWORKS.find((x) => x.key === n)?.label ?? n;
           </fieldset>
         )}
 
-        <form method="post" class="mt-5 grid gap-4 lg:grid-cols-[1fr_260px]" id="composer">
+        <form method="post" class="mt-5 grid gap-4 sm:grid-cols-[minmax(0,1fr)_220px]" id="composer" novalidate>
           <input type="hidden" name="itemId" value={draft.itemId} />
-          <div class="space-y-3">
+          <div class="space-y-3 min-w-0">
             <div>
               <label class="label" for="caption">Caption <span class="font-normal text-ink-2" data-count>({draft.caption.length}/2200)</span></label>
-              <textarea class="input" id="caption" name="caption" rows="6" maxlength="2200" required placeholder="Click “Write captions”, or write your own." {...invalid(composeErrors, 'caption')}>{draft.caption}</textarea>
+              <textarea class="input" id="caption" name="caption" rows="7" maxlength="2200" required placeholder="Click “Write captions”, or write your own." {...invalid(composeErrors, 'caption')}>{draft.caption}</textarea>
               {composeErrors.caption && <p id="caption-err" class="g-err">{composeErrors.caption}</p>}
             </div>
             <fieldset><legend class="label">Networks</legend>
-              <div class="flex flex-wrap gap-2">
+              <div class="flex flex-wrap gap-1.5">
                 {NETWORKS.map((n) => (
-                  <label class="flex items-center gap-2 rounded-xl border border-line px-3 py-2 text-sm cursor-pointer has-[:checked]:border-brand has-[:checked]:bg-brand-soft/50">
+                  <label class="flex items-center gap-2 rounded-full border border-line px-3 py-1.5 text-sm cursor-pointer has-[:checked]:border-brand has-[:checked]:bg-brand-soft/50 has-[:focus-visible]:ring-2 has-[:focus-visible]:ring-brand/40">
                     <input type="checkbox" name="networks" value={n.key} checked={draft.networks.includes(n.key)} class="accent-[var(--color-brand)]" />{n.label}
                     <span class:list={['size-2 rounded-full', connected.includes(n.key) ? 'bg-mint' : 'bg-line']} title={connected.includes(n.key) ? 'Connected — auto-publishes' : 'Manual — copy & mark as posted'}></span>
                   </label>
                 ))}
               </div>
-              {composeErrors.networks ? <p class="g-err">{composeErrors.networks}</p> : <p class="hint">Green dot = auto-publish. Others are manual: we remind you, you copy the caption and tap “Mark as posted”.</p>}
+              {composeErrors.networks ? <p class="g-err">{composeErrors.networks}</p> : <p class="hint">Green dot = auto-publishes. Others are manual: we remind you, you copy the caption and tap “Mark as posted”.</p>}
             </fieldset>
-            <div class="flex flex-wrap items-end gap-2 pt-2 border-t border-line">
-              <button class="btn-ghost" name="_action" value="save" disabled={!canEdit}>Save draft</button>
-              <div><label class="label text-xs" for="scheduledAt">Post at ({t.timezone.split('/')[1]?.replace('_', ' ')} time)</label><input class="input w-auto" type="datetime-local" id="scheduledAt" name="scheduledAt" value={defaultAt} {...invalid(composeErrors, 'scheduledAt')} />{composeErrors.scheduledAt && <p id="scheduledAt-err" class="g-err">{composeErrors.scheduledAt}</p>}</div>
+          </div>
+          <div class="min-w-0">
+            <p class="label">Image</p>
+            <div class="rounded-xl border border-line overflow-hidden bg-canvas aspect-[4/3] grid place-items-center">
+              <img data-preview src={draft.imageUrl || undefined} alt="Selected post image" class:list={['size-full object-cover', !draft.imageUrl && 'hidden']} />
+              {!draft.imageUrl && <span data-noimg class="text-xs text-ink-2">Pick an image below</span>}
+            </div>
+            <label class="sr-only" for="imageUrl">Image URL</label>
+            <input class="input text-xs mt-2" id="imageUrl" name="imageUrl" value={draft.imageUrl} maxlength="500" placeholder="or paste /path or https://" {...invalid(composeErrors, 'imageUrl')} />{composeErrors.imageUrl && <p id="imageUrl-err" class="g-err">{composeErrors.imageUrl}</p>}
+          </div>
+          <div class="sm:col-span-2 grid grid-cols-6 sm:grid-cols-12 gap-1.5" role="group" aria-label="Pick an item image">
+            {imageChoices.map((src) => <button type="button" class="aspect-square rounded-lg border border-line overflow-hidden hover:ring-2 hover:ring-brand focus-visible:ring-2 focus-visible:ring-brand bg-canvas cursor-pointer" data-img={src} aria-label="Use this image"><img src={src} alt="" class="size-full object-cover" loading="lazy" /></button>)}
+          </div>
+          <div class="sm:col-span-2 flex flex-wrap items-end gap-2 pt-3 border-t border-line">
+            <button class="btn-ghost" name="_action" value="save" disabled={!canEdit} data-busy="Saving…">Save draft</button>
+            <div class="ml-auto flex flex-wrap items-end gap-2">
+              <div><label class="label text-xs" for="scheduledAt">Post at ({t.timezone.split('/')[1]?.replace('_', ' ')} time)</label><input class="input w-auto" type="datetime-local" id="scheduledAt" name="scheduledAt" value={defaultAt} {...invalid(composeErrors, 'scheduledAt')} /></div>
               <button class="btn-primary" name="_action" value="schedule" disabled={!canEdit} data-busy="Scheduling…"><Icon name="clock" size={16} />Schedule</button>
             </div>
-          </div>
-          <div>
-            <label class="label" for="imageUrl">Image</label>
-            <input class="input text-xs" id="imageUrl" name="imageUrl" value={draft.imageUrl} maxlength="500" placeholder="/demo/… or https://" {...invalid(composeErrors, 'imageUrl')} />{composeErrors.imageUrl && <p id="imageUrl-err" class="g-err">{composeErrors.imageUrl}</p>}
-            <div class="mt-2 grid grid-cols-4 gap-1.5" role="group" aria-label="Pick an item image">
-              {imageChoices.map((src) => <button type="button" class="aspect-square rounded-lg border border-line overflow-hidden hover:ring-2 hover:ring-brand bg-canvas cursor-pointer" data-img={src} aria-label="Use this image"><img src={src} alt="" class="size-full object-cover" loading="lazy" /></button>)}
-            </div>
-            <div class="mt-3 rounded-xl border border-line overflow-hidden bg-canvas aspect-square grid place-items-center">
-              <img data-preview src={draft.imageUrl || undefined} alt="Selected post image" class:list={['size-full object-cover', !draft.imageUrl && 'hidden']} />
-              {!draft.imageUrl && <span data-noimg class="text-xs text-ink-2">No image</span>}
-            </div>
+            {composeErrors.scheduledAt && <p id="scheduledAt-err" class="g-err w-full text-right">{composeErrors.scheduledAt}</p>}
           </div>
         </form>
       </section>

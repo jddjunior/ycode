@@ -160,7 +160,7 @@ const ST: Record<string, string> = { accrued: 'bg-canvas text-ink-2', payable: '
     <div class="kpi"><p class="kpi-label">Overflow leads</p><p class="kpi-value">{sentLeads.n}<span class="text-sm text-ink-2 font-medium"> sent · {gotLeads.n} received</span></p></div>
   </div>
 
-  <section id="referrals" class="grid gap-6 lg:grid-cols-[1fr_1fr] mb-6 scroll-mt-24">
+  <section id="referrals" class="grid gap-6 lg:grid-cols-[1fr_1fr] mb-6 scroll-mt-24 items-start">
     <div class="card p-5 sm:p-6 bg-gradient-to-br from-brand to-[#3B22C9] text-white border-brand">
       <p class="chip bg-white/15 text-white">Operator referral program</p>
       <h2 class="text-2xl font-extrabold mt-3 text-white">Earn {pct(plan.referralCommissionBps)} of every referral’s subscription for {REFERRAL_MONTHS} months</h2>
@@ -170,15 +170,25 @@ const ST: Record<string, string> = { accrued: 'bg-canvas text-ink-2', payable: '
         <input id="reflink" class="input bg-white/95 font-mono text-xs" readonly value={refLink} />
         <button type="button" class="btn-pop shrink-0" data-copy="reflink">Copy</button>
       </div>
-      <p class="text-xs text-white/70 mt-2">Code <strong class="font-mono text-white">{t.referralCode}</strong> · paid monthly once payable · referrals must be a different business.</p>
+      <p class="text-xs text-white/70 mt-2">Code <strong class="font-mono text-white">{t.referralCode}</strong> · paid out once marked payable · referrals must be a different business.</p>
     </div>
     <div class="card overflow-hidden">
       <h2 class="font-bold px-4 py-3 border-b border-line">Earnings</h2>
-      {earnings.length === 0 ? <p class="p-4 text-sm text-ink-2">No earnings yet. Share your link or send an overflow lead to a partner.</p> : (
+      {earnings.length === 0 ? (
+        <div class="p-5 space-y-3">
+          <p class="text-sm text-ink-2">No earnings yet — here’s how they start flowing:</p>
+          <ol class="space-y-2 text-sm">
+            <li class="flex gap-3 rounded-xl bg-canvas p-3"><span class="grid place-items-center size-7 rounded-full bg-brand text-white text-xs font-bold shrink-0">1</span><span><strong>Share your referral link</strong><span class="block text-xs text-ink-2">A Pro referral pays you {money(Math.round(PLANS.pro.monthlyCents * plan.referralCommissionBps / 10_000))} every month for {REFERRAL_MONTHS} months.</span></span></li>
+            <li class="flex gap-3 rounded-xl bg-canvas p-3"><span class="grid place-items-center size-7 rounded-full bg-brand text-white text-xs font-bold shrink-0">2</span><span><strong>Send overflow to a partner</strong><span class="block text-xs text-ink-2">A $300 booking from your lead earns you {money(Math.round(30000 * PARTNER_SHARE_BPS / 10_000))}.</span></span></li>
+            <li class="flex gap-3 rounded-xl bg-canvas p-3"><span class="grid place-items-center size-7 rounded-full bg-brand text-white text-xs font-bold shrink-0">3</span><span><strong>Watch it here</strong><span class="block text-xs text-ink-2">Every share moves accrued → payable → paid, paid out monthly.</span></span></li>
+          </ol>
+          <a href="#overflow" class="btn-ghost w-full">Send an overflow lead</a>
+        </div>
+      ) : (
         <ul class="sm:hidden divide-y divide-line max-h-80 overflow-y-auto">
           {earnings.slice(0, 50).map((e) => <li class="px-4 py-2.5 flex items-center gap-2 text-sm"><span class="min-w-0 flex-1"><span class="block font-semibold">{KIND[e.kind] ?? e.kind}</span><span class="block text-xs text-ink-2 truncate">{(e.tenantId && names.get(e.tenantId)) ?? '—'} · {fmtDay(e.createdAt, t.timezone)}</span></span><span class="tabular-nums font-bold">{money(e.amountCents)}</span><span class:list={['chip', ST[e.status]]}>{e.status}</span></li>)}
         </ul>
-        <div class="overflow-x-auto max-h-80 hidden sm:block">
+        <div class="relative overflow-x-auto max-h-80 hidden sm:block">
           <table class="table">
             <thead><tr><th>Date</th><th>Type</th><th>From</th><th class="text-right">Amount</th><th>Status</th></tr></thead>
             <tbody>{earnings.slice(0, 50).map((e) => <tr><td class="whitespace-nowrap">{fmtDay(e.createdAt, t.timezone)}</td><td>{KIND[e.kind] ?? e.kind}</td><td class="truncate max-w-40">{(e.tenantId && names.get(e.tenantId)) ?? '—'}</td><td class="text-right tabular-nums font-semibold">{money(e.amountCents)}</td><td><span class:list={['chip', ST[e.status]]}>{e.status}</span></td></tr>)}</tbody>

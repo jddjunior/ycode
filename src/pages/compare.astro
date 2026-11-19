@@ -51,14 +51,14 @@ const pains = [
       <span class="flex items-center gap-1.5"><span class="grid place-items-center size-5 rounded-full bg-red-50 text-red-700"><Icon name="x" size={12} /></span>Not offered</span>
       <span class="flex items-center gap-1.5"><span class="grid place-items-center size-5 rounded-full bg-canvas">?</span>Not found in public info</span>
     </div>
-    <div class="card overflow-x-auto">
+    <div class="card overflow-hidden max-w-full"><div class="relative overflow-x-auto overscroll-x-contain" tabindex="0" role="region" aria-label="Comparison table (scroll sideways)">
       <table class="table min-w-[980px]">
         <caption class="sr-only">Feature comparison of bounce house rental software</caption>
-        <thead><tr><th scope="col" class="sticky left-0 bg-canvas z-10 min-w-56">Feature</th>{cols.map((c, i) => <th scope="col" class:list={['text-center', i === 0 && '!bg-brand !text-white']}>{c}</th>)}</tr></thead>
+        <thead><tr><th scope="col" class="sticky left-0 z-10 bg-canvas min-w-48">Feature</th>{cols.map((c, i) => <th scope="col" class:list={['text-center', i === 0 && '!bg-brand !text-white']}>{c}</th>)}</tr></thead>
         <tbody>
           {rows.map((r) => (
             <tr>
-              <th scope="row" class="sticky left-0 bg-white z-10 text-left font-semibold text-sm text-ink normal-case tracking-normal px-4 py-3 border-b border-line">{r.f}{r.note && <span class="block text-xs font-normal text-ink-2 mt-0.5">{r.note}</span>}</th>
+              <th scope="row" class="sticky left-0 z-10 bg-white text-left font-semibold text-sm text-ink normal-case tracking-normal px-4 py-3 border-b border-line">{r.f}{r.note && <span class="block text-xs font-normal text-ink-2 mt-0.5">{r.note}</span>}</th>
               {r.v.map((v, i) => { const c = cell(v); return (
                 <td class:list={['text-center', i === 0 && 'bg-brand-soft/50']}>
                   {c ? <span class:list={['inline-grid place-items-center size-7 rounded-full', c.cls]} title={c.sr}>{c.icon ? <Icon name={c.icon} size={14} /> : '?'}<span class="sr-only">{c.sr}</span></span> : <span class:list={['text-xs', i === 0 ? 'font-bold text-brand' : 'text-ink-2']}>{v}</span>}
@@ -68,7 +68,8 @@ const pains = [
           ))}
         </tbody>
       </table>
-    </div>
+    </div></div>
+    <p class="text-xs text-ink-2 mt-3 md:hidden">← Swipe the table to see every product →</p>
     <p class="text-xs text-ink-2 mt-3">Sources: vendor pricing/feature pages and public reviews (Capterra, Software Advice, G2, app stores), collected November 2026 from search results. Prices change — confirm with each vendor. “?” means we couldn’t verify it either way, not that it’s missing. Trademarks belong to their owners; we’re not affiliated with them.</p>
   </section>
 

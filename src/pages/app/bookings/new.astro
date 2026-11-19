@@ -12,6 +12,7 @@ import Help from '../../../components/ops/Help.astro';
 import SubmitGuard from '../../../components/ops/SubmitGuard.astro';
 import { getDb, schema } from '../../../db/client';
 import { createBooking, BookingError } from '../../../lib/booking';
+import { attributionFromLead } from '../../../lib/revenue';
 import { formData, str, int, bool, parse } from '../../../lib/forms';
 import { opsCtx, isUuid, isValidDay, addDays } from '../../../lib/ops/ctx';
 import { logActivity } from '../../../lib/ops/stats';
@@ -81,11 +82,12 @@ if (f) {
   }
   else {
     try {
+      const fromLead = await attributionFromLead(t.id, leadId);
       const { booking } = await createBooking(t, {
         window: { day: prefill.day, startHour: prefill.startHour, endHour: prefill.endHour, overnight: bool(f, 'overnight') },
         lines, zip: prefill.zip, surface: prefill.surface, damageWaiver: prefill.damageWaiver, couponCode: prefill.coupon || null,
         customer, address: prefill.address!, city: prefill.city!, state: prefill.state!, eventType: prefill.eventType || 'birthday', notes: prefill.notes,
-        status, skipRules: true, source: 'phone', attribution: { channel: 'direct', utmSource: 'manual' },
+        status, skipRules: true, source: 'phone', attribution: fromLead ?? { channel: 'direct', utmSource: 'manual' },
         leadId: isUuid(leadId) ? leadId : null,
       });
       if (isUuid(leadId)) {

@@ -66,6 +66,13 @@ export async function topCities(limit = 10) {
 
 export async function signupsByWeek(weeks = 8) {
   const db = await getDb();
-  return db.select({ wk: sql<string>`to_char(date_trunc('week', ${schema.tenants.createdAt}), 'Mon DD')`, n: sql<number>`count(*)::int` }).from(schema.tenants)
-    .where(gte(schema.tenants.createdAt, new Date(Date.now() - weeks * 7 * 86_400_000))).groupBy(sql`date_trunc('week', ${schema.tenants.createdAt})`).orderBy(sql`date_trunc('week', ${schema.tenants.createdAt})`);
+  const rows = await db.select({ wk: sql<string>`to_char(date_trunc('week', ${schema.tenants.createdAt}), 'YYYY-MM-DD')`, n: sql<number>`count(*)::int` }).from(schema.tenants)
+    .where(gte(schema.tenants.createdAt, new Date(Date.now() - weeks * 7 * 86_400_000))).groupBy(sql`date_trunc('week', ${schema.tenants.createdAt})`);
+  // Fill empty weeks so the chart reads as a trend, not a lone bar.
+  const monday = new Date(); monday.setUTCHours(0, 0, 0, 0); monday.setUTCDate(monday.getUTCDate() - ((monday.getUTCDay() + 6) % 7));
+  return Array.from({ length: weeks }, (_, i) => {
+    const d = new Date(monday.getTime() - (weeks - 1 - i) * 7 * 86_400_000);
+    const key = d.toISOString().slice(0, 10);
+    return { wk: d.toLocaleDateString('en-US', { month: 'short', day: 'numeric', timeZone: 'UTC' }), n: rows.find((r) => r.wk === key)?.n ?? 0 };
+  });
 }

@@ -20,7 +20,7 @@ const TZ = { 'America/New_York': 'Eastern', 'America/Chicago': 'Central', 'Ameri
 const Schema = z.object({
   name: z.string().min(2, 'Enter your business name').max(80),
   ownerName: z.string().max(80),
-  email: z.string().email('Enter a valid email'),
+  email: z.email('Enter a valid email'),
   password: z.string().refine(passwordOk, PASSWORD_RULE),
   phone: z.string().max(30),
   city: z.string().min(2, 'Enter your city').max(60),

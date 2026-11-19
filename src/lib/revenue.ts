@@ -27,6 +27,7 @@ export async function onBookingPayment(p: { tenantId: string; bookingId: string;
 
   const [b] = await db.select().from(schema.bookings).where(eq(schema.bookings.id, p.bookingId)).limit(1);
   if (!b) return;
+  await onBookingWon(db, b);
   // Marketplace-originated booking → marketplace fee on the booking subtotal, once.
   if (b.attribution?.channel === 'marketplace') {
     await accrue(db, { kind: 'marketplace_lead_fee', tenantId: p.tenantId, amountCents: bps(b.subtotalCents, MARKETPLACE_FEE_BPS), bookingId: b.id, sourceRef: `mkt:${b.id}`, memo: 'BounceOS marketplace booking fee' });
@@ -73,4 +74,44 @@ export async function ledgerSummary(sinceDays = 30, tenantId?: string) {
 export async function operatorEarnings(tenantId: string) {
   const db = await getDb();
   return db.select().from(schema.revenueEvents).where(eq(schema.revenueEvents.beneficiaryTenantId, tenantId)).orderBy(sql`${schema.revenueEvents.createdAt} desc`).limit(200);
+}
+
+const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+/**
+ * Conversion side effects, run once per booking on its first payment:
+ * credit the email/SMS campaign or ad campaign named in utm_campaign, and mark
+ * the originating marketplace lead as won. Guarded by attribution.countedAt.
+ */
+export async function onBookingWon(db: DB, b: typeof schema.bookings.$inferSelect) {
+  const attr = (b.attribution ?? {}) as typeof b.attribution & { countedAt?: string };
+  if (attr.countedAt) return;
+  const camp = attr.utmCampaign;
+  if (camp && UUID.test(camp)) {
+    await db.update(schema.campaigns).set({ bookingsAttributed: sql`${schema.campaigns.bookingsAttributed} + 1` })
+      .where(and(eq(schema.campaigns.id, camp), eq(schema.campaigns.tenantId, b.tenantId)));
+    await db.update(schema.adCampaigns).set({ conversions: sql`${schema.adCampaigns.conversions} + 1` })
+      .where(and(eq(schema.adCampaigns.id, camp), eq(schema.adCampaigns.tenantId, b.tenantId)));
+  }
+  if (b.leadId) {
+    const [lead] = await db.select().from(schema.leads).where(and(eq(schema.leads.id, b.leadId), eq(schema.leads.tenantId, b.tenantId))).limit(1);
+    if (lead?.marketplaceLeadId) {
+      await db.update(schema.marketplaceLeads).set({ wonByTenantId: b.tenantId })
+        .where(and(eq(schema.marketplaceLeads.id, lead.marketplaceLeadId), sql`${schema.marketplaceLeads.wonByTenantId} is null`));
+    }
+  }
+  await db.update(schema.bookings).set({ attribution: { ...attr, countedAt: new Date().toISOString() } as typeof b.attribution })
+    .where(eq(schema.bookings.id, b.id));
+}
+
+/** Attribution a booking should carry when it is created from a lead. */
+export async function attributionFromLead(tenantId: string, leadId: string | null | undefined) {
+  if (!leadId || !UUID.test(leadId)) return null;
+  const db = await getDb();
+  const [lead] = await db.select().from(schema.leads).where(and(eq(schema.leads.id, leadId), eq(schema.leads.tenantId, tenantId))).limit(1);
+  if (!lead) return null;
+  const a = lead.attribution ?? {};
+  if (a.channel) return a;
+  if (lead.source === 'marketplace') return { channel: 'marketplace' as const, utmSource: 'bounceos', utmMedium: 'marketplace' };
+  return null;
 }

@@ -12,6 +12,7 @@ import SubmitGuard from '../../../components/ops/SubmitGuard.astro';
 import { getDb, schema } from '../../../db/client';
 import { money } from '../../../lib/pricing';
 import { bookingWithLines, recordPayment } from '../../../lib/booking';
+import { onBookingPayment } from '../../../lib/revenue';
 import { send } from '../../../lib/notify';
 import { siteOrigin } from '../../../lib/tenant';
 import { formData, str, cents, flash, parse } from '../../../lib/forms';
@@ -49,6 +50,8 @@ if (f && canManage) {
     const res = await recordPayment(t.id, b.id, { provider: d.method, ref, amountCents: d.amount, applicationFeeCents: 0 });
     if (res.duplicate) flash(Astro.cookies, `That ${d.method} reference was already recorded.`, 'error');
     else {
+      // Offline payments carry no platform fee, but still trigger marketplace/partner shares and conversion credit.
+      await onBookingPayment({ tenantId: t.id, bookingId: b.id, paymentRef: ref ?? `${d.method}:${b.id}:${Date.now()}`, amountCents: d.amount, applicationFeeCents: 0 });
       await logActivity(t.id, 'payment', `${money(d.amount)} ${d.method} payment recorded on #${b.number}`, { bookingId: b.id });
       return Astro.redirect(`${self}?done=paid&amt=${d.amount}`, 303);
     }

@@ -38,7 +38,7 @@ export const DEFAULT_SETTINGS: TenantSettings = {
 
 const b = (type: string, props: Record<string, unknown>): Block => ({ id: token(6), type, props });
 
-export function homeBlocks(name: string, city: string): Block[] {
+export function homeBlocks(_name: string, city: string): Block[] {
   return [
     b('hero', {
       eyebrow: `${city}'s friendly party rental crew`,

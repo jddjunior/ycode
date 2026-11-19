@@ -44,7 +44,7 @@ const session = Astro.locals.session;
           <a href="/find" class="hover:text-ink">Find a rental</a>
         </nav>
         <div class="ml-auto flex items-center gap-2">
-          {session ? <a href="/app" class="btn-primary">Open dashboard</a> : <>
+          {session ? (session.tenant ? <a href="/app" class="btn-primary">Open dashboard</a> : session.user.isPlatformAdmin ? <a href="/hq" class="btn-primary">HQ</a> : <a href="/signup" class="btn-primary">Finish setup</a>) : <>
             <a href="/login" class="btn-ghost">Sign in</a>
             <a href="/signup" class="btn-primary">Start free</a>
           </>}

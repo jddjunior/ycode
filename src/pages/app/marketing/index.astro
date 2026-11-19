@@ -147,7 +147,7 @@ const turnedOn = doneKey === 'auto-on' ? autos.find((a) => a.id === Astro.url.se
     </div>
   </section>
 
-  <div class="grid gap-6 lg:grid-cols-[1fr_340px]">
+  <div class="grid gap-6 lg:grid-cols-[1fr_340px] items-start">
     <section class="card overflow-hidden min-w-0" aria-labelledby="camp-h">
       <h2 id="camp-h" class="font-bold px-4 py-3 border-b border-line">Broadcasts</h2>
       {broadcasts.length === 0 ? (
@@ -162,7 +162,7 @@ const turnedOn = doneKey === 'auto-on' ? autos.find((a) => a.id === Astro.url.se
             </a></li>
           ))}
         </ul>
-        <div class="overflow-x-auto hidden md:block">
+        <div class="relative overflow-x-auto hidden md:block">
           <table class="table">
             <thead><tr><th>Campaign</th><th>Status</th><th class="text-right">Sent</th><th class="text-right">Opens</th><th class="text-right">Clicks</th><th class="text-right">Bookings</th></tr></thead>
             <tbody>
@@ -200,10 +200,15 @@ const turnedOn = doneKey === 'auto-on' ? autos.find((a) => a.id === Astro.url.se
           </div>
         </fieldset>
         <div><label class="label" for="segment">Who gets it</label><select class="input" id="segment" name="segment">{SEGMENTS.map((s) => <option value={s.key} selected={values.segment === s.key}>{s.label}</option>)}</select></div>
-        <div><label class="label" for="notBookedDays">N days <span class="font-normal text-ink-2">(for “haven’t booked in N days”)</span></label><input class="input" type="number" id="notBookedDays" name="notBookedDays" value={values.notBookedDays} min="7" max="3650" {...invalid(errors, 'notBookedDays')} />{errors.notBookedDays && <p id="notBookedDays-err" class="g-err">{errors.notBookedDays}</p>}</div>
+        <div data-ndays class:list={[values.segment !== 'dormant' && !errors.notBookedDays && 'hidden']}><label class="label" for="notBookedDays">Haven’t booked in how many days?</label><input class="input" type="number" id="notBookedDays" name="notBookedDays" value={values.notBookedDays} min="7" max="3650" {...invalid(errors, 'notBookedDays')} />{errors.notBookedDays && <p id="notBookedDays-err" class="g-err">{errors.notBookedDays}</p>}</div>
         <p class="hint">Only opted-in customers receive it. You’ll write and preview the message next.</p>
         <button class="btn-primary w-full" data-busy="Creating…"><Icon name="plus" size={16} />Create & write message</button>
       </form>
     )}
   </div>
+  <script>
+    const seg = document.getElementById('segment') as HTMLSelectElement | null;
+    const nd = document.querySelector<HTMLElement>('[data-ndays]');
+    seg?.addEventListener('change', () => nd?.classList.toggle('hidden', seg.value !== 'dormant'));
+  </script>
 </AppLayout>

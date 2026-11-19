@@ -120,7 +120,7 @@ const landingPaths = [...new Set(camp.creative.adGroups.map((g) => { try { retur
       ]} />
   )}
   {doneKey === 'managed' && (
-    <NextSteps title="Sent to the Branch Avenue ads team" text={`We’ll review the copy, set up conversion tracking and launch within one business day. You’ll see spend, bookings and cost per booking here weekly. Fee: ${pct(plan.adsManagementBps)} of spend.`} dismissHref={`/app/ads/${id}`}
+    <NextSteps title="Sent to the Branch Avenue ads team" text={`We’ll review the copy, set up conversion tracking and launch it. You’ll see spend, bookings and cost per booking here weekly. Fee: ${pct(plan.adsManagementBps)} of spend.`} dismissHref={`/app/ads/${id}`}
       actions={[{ href: '/app/ads', label: 'Back to campaigns', icon: 'target', primary: true }, { href: '/app/seo#generator', label: 'Strengthen the landing city pages', icon: 'map' }]} />
   )}
   {doneKey === 'spend' && (
