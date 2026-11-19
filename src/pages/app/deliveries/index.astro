@@ -48,7 +48,7 @@ const unrouted = route.ordered.filter((s) => s.booking.lat == null || s.booking.
 const depot = depotOf(t);
 const hasCrew = team.some((m) => m.role === 'crew');
 ---
-<AppLayout title="Deliveries" section="deliveries" subtitle={`${dayTitle(day, today)} · ${shortDay(day)}`} wide>
+<AppLayout title="Deliveries" section="deliveries" subtitle={[today, addDays(today, 1), addDays(today, -1)].includes(day) ? `${dayTitle(day, today)} · ${shortDay(day)}` : dayTitle(day, today)} wide>
   <Fragment slot="actions">
     <a href={`?day=${addDays(day, -1)}`} class="btn-ghost px-3" aria-label="Previous day"><Icon name="arrow" size={16} class="rotate-180" /></a>
     <form method="get" class="flex"><label class="sr-only" for="day">Day</label><input id="day" name="day" type="date" class="input w-40" value={day} onchange="this.form.submit()" /></form>

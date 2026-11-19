@@ -16,7 +16,10 @@ interface Props {
   errors?: Record<string, string>;
   submitLabel: string;
 }
-const { item = {}, categories, others, surfaces, error, errors = {}, submitLabel } = Astro.props;
+const { item = {}, categories, others, surfaces, error, errors: rawErrors = {}, submitLabel } = Astro.props;
+// Collapse nested zod paths (e.g. images.0) onto their field.
+const errors: Record<string, string> = { ...rawErrors };
+for (const [k, v] of Object.entries(rawErrors)) { const base = k.split('.')[0]; errors[base] ??= v; }
 const inv = (k: string) => (errors[k] ? { 'aria-invalid': 'true' as const, 'aria-describedby': `${k}-err` } : {});
 const sp = (item.specs ?? {}) as OpsSpecs;
 const kind = item.kind ?? 'rental';

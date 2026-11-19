@@ -3,48 +3,67 @@ import { and, desc, eq, gte, sql } from 'drizzle-orm';
 import { z } from 'zod';
 import AppLayout from '../../../layouts/AppLayout.astro';
 import Icon from '../../../components/Icon.astro';
+import Guide from '../../../components/growth/Guide.astro';
+import Empty from '../../../components/growth/Empty.astro';
+import Enhance from '../../../components/growth/Enhance.astro';
+import NextSteps from '../../../components/growth/NextSteps.astro';
 import Tabs from './_Tabs.astro';
 import { getDb, schema } from '../../../db/client';
 import { formData, str, int, parse } from '../../../lib/forms';
-import { SEGMENTS, MERGE_TAGS, AUTOMATIONS, ensureAutomations, segmentLabel, segmentCustomers } from '../../../lib/growth/campaigns';
-import { ctx, done, fmtDateTime } from '../../../lib/growth/app';
+import { SEGMENTS, AUTOMATIONS, ensureAutomations, segmentLabel, segmentCustomers } from '../../../lib/growth/campaigns';
+import { ctx, done, go, invalid, fmtDateTime } from '../../../lib/growth/app';
 
 const { t, tenantId, canEdit } = ctx(Astro);
 const db = await getDb();
 
 const Create = z.object({
-  name: z.string().min(3, 'Give the campaign a name').max(100),
+  name: z.string().min(3, 'Give the campaign a name (3+ characters)').max(100),
   channel: z.enum(['email', 'sms']),
   segment: z.string().refine((s) => SEGMENTS.some((x) => x.key === s), 'Pick a segment'),
-  notBookedDays: z.number().int().min(7).max(3650),
+  notBookedDays: z.number().int().min(7, 'At least 7 days').max(3650),
 });
+const AUTO_WHY: Record<string, string> = {
+  birthday: 'Parents re-book for the next birthday — if you remind them first.',
+  review: 'More recent Google reviews = higher in the map pack.',
+  abandoned: 'Rescues carts left at checkout while the date is still open.',
+  seasonal: 'Fills early-summer weekends before competitors do.',
+};
+
+// "Create the follow-up" from a sent campaign pre-fills this form.
+const followId = Astro.url.searchParams.get('followup');
+const [follow] = followId && z.uuid().safeParse(followId).success ? await db.select().from(schema.campaigns).where(and(eq(schema.campaigns.id, followId), eq(schema.campaigns.tenantId, tenantId))).limit(1) : [];
+let errors: Record<string, string> = {};
+let values: Record<string, string> = follow
+  ? { name: `Follow-up: ${follow.name}`.slice(0, 100), channel: follow.channel === 'email' ? 'sms' : 'email', segment: follow.segment.type ?? 'all', notBookedDays: String(follow.segment.notBookedDays ?? 180) }
+  : { name: '', channel: 'email', segment: 'past', notBookedDays: '180' };
 
 const f = await formData(Astro);
 if (f) {
   if (!canEdit) return done(Astro, 'Only owners and managers can manage campaigns.', undefined, 'error');
   const action = str(f, '_action', 20);
   if (action === 'create') {
-    const r = parse(Create, { name: str(f, 'name', 100), channel: str(f, 'channel', 5), segment: str(f, 'segment', 20), notBookedDays: int(f, 'notBookedDays', 180) });
-    if (!r.ok) return done(Astro, Object.values(r.errors)[0], undefined, 'error');
-    const sms = r.data.channel === 'sms';
-    const [row] = await db.insert(schema.campaigns).values({
-      tenantId, name: r.data.name, channel: r.data.channel, kind: 'broadcast', status: 'draft',
-      segment: { type: r.data.segment, ...(r.data.segment === 'dormant' ? { notBookedDays: r.data.notBookedDays } : {}) },
-      subject: sms ? '' : `Weekend dates are filling up, {{first_name}}`,
-      body: sms ? 'Hi {{first_name}}! {{business}} has a few weekend dates left this month. Book in 2 min: {{book_url}}' : 'Hi {{first_name}},\n\nWe still have a few weekend dates open this month — bounce houses, water slides and combos, delivered and set up.\n\nCheck your date: {{book_url}}\n\nThanks for being part of the {{business}} family!',
-    }).returning({ id: schema.campaigns.id });
-    return done(Astro, 'Campaign created. Edit the message, then send or schedule it.', `/app/marketing/${row.id}`);
-  }
-  if (action === 'toggle') {
+    values = { name: str(f, 'name', 100), channel: str(f, 'channel', 5), segment: str(f, 'segment', 20), notBookedDays: str(f, 'notBookedDays', 5) || '180' };
+    const r = parse(Create, { ...values, notBookedDays: int(f, 'notBookedDays', 180) });
+    if (!r.ok) { errors = r.errors; Astro.response.status = 422; }
+    else {
+      const sms = r.data.channel === 'sms';
+      const [row] = await db.insert(schema.campaigns).values({
+        tenantId, name: r.data.name, channel: r.data.channel, kind: 'broadcast', status: 'draft',
+        segment: { type: r.data.segment, ...(r.data.segment === 'dormant' ? { notBookedDays: r.data.notBookedDays } : {}) },
+        subject: sms ? '' : `Weekend dates are filling up, {{first_name}}`,
+        body: sms ? 'Hi {{first_name}}! {{business}} has a few weekend dates left this month. Book in 2 min: {{book_url}}' : 'Hi {{first_name}},\n\nWe still have a few weekend dates open this month — bounce houses, water slides and combos, delivered and set up.\n\nCheck your date: {{book_url}}\n\nThanks for being part of the {{business}} family!',
+      }).returning({ id: schema.campaigns.id });
+      return go(Astro, `/app/marketing/${row.id}?done=created`);
+    }
+  } else if (action === 'toggle') {
     const id = str(f, 'id', 40);
     if (!z.uuid().safeParse(id).success) return done(Astro, 'Unknown automation.', undefined, 'error');
     const on = str(f, 'on', 5) === '1';
     const [row] = await db.update(schema.campaigns).set({ status: on ? 'automated' : 'draft' })
       .where(and(eq(schema.campaigns.id, id), eq(schema.campaigns.tenantId, tenantId), sql`${schema.campaigns.kind} <> 'broadcast'`)).returning();
     if (!row) return done(Astro, 'Unknown automation.', undefined, 'error');
-    return done(Astro, `${row.name} is now ${on ? 'on' : 'off'}.`, '/app/marketing#automations');
-  }
-  return done(Astro, 'Unknown action.', undefined, 'error');
+    return on ? go(Astro, `/app/marketing?done=auto-on&id=${row.id}#automations`) : done(Astro, `${row.name} is off. Nothing more will send.`, '/app/marketing#automations');
+  } else return done(Astro, 'Unknown action.', undefined, 'error');
 }
 
 const autos = await ensureAutomations(db, tenantId);
@@ -59,12 +78,34 @@ const [aud] = await db.select({ email: sql<number>`count(*) filter (where ${sche
 const recips = Object.fromEntries(await Promise.all(broadcasts.filter((c) => c.status === 'draft' || c.status === 'scheduled').map(async (c) => [c.id, (await segmentCustomers(db, tenantId, c.segment, c.channel)).length] as const)));
 const STATUS: Record<string, string> = { draft: 'bg-canvas text-ink-2', scheduled: 'bg-sky-100 text-sky-800', sending: 'bg-sun/30 text-[#7A5200]', sent: 'bg-green-50 text-green-800', automated: 'bg-brand-soft text-brand' };
 const rate = (a: number, b: number) => (b ? `${Math.round((a / b) * 100)}%` : '—');
+const doneKey = Astro.url.searchParams.get('done');
+const turnedOn = doneKey === 'auto-on' ? autos.find((a) => a.id === Astro.url.searchParams.get('id')) : undefined;
 ---
-<AppLayout title="Campaigns & Reviews" section="marketing" subtitle="Email & SMS that fill weekends — birthdays, re-books, reviews and promos — without a separate HighLevel bill.">
+<AppLayout title="Campaigns & Reviews" section="marketing" subtitle="Email & SMS that fill weekends — birthdays, re-books, reviews and promos — without a separate marketing subscription.">
+  {canEdit && <a slot="actions" href="#new-campaign" class="btn-primary"><Icon name="plus" size={16} />New campaign</a>}
+  <Enhance />
   <Tabs active="campaigns" />
 
+  {turnedOn && (
+    <NextSteps title={`${turnedOn.name} is on`} text={`It runs automatically every few minutes: ${AUTOMATIONS.find((a) => a.kind === turnedOn.kind)?.when.toLowerCase()}. Only customers who opted in receive marketing messages.`} dismissHref="/app/marketing"
+      actions={[
+        { href: `/app/marketing/${turnedOn.id}`, label: 'Review the message', icon: 'message', primary: true },
+        ...(turnedOn.kind === 'review' ? [{ href: '/app/marketing/reviews', label: 'Ask recent customers now', icon: 'star' }] : []),
+        { href: '/app/customers', label: 'Check who’s opted in', icon: 'users' },
+      ]} />
+  )}
+
+  <Guide why="Your past customers are your cheapest bookings: no ad spend, they already trust you, and kids have a birthday every year. Built-in automations do the remembering for you.">
+    <li>Turn on the birthday re-book and review request automations first — they pay off all year.</li>
+    <li>Segments only include customers who opted in to that channel. We never message anyone else.</li>
+    <li>Merge tags personalise each message: <code>{'{{first_name}}'}</code>, <code>{'{{celebrant}}'}</code>, <code>{'{{book_url}}'}</code>.</li>
+    <li>Book links carry UTM tags, so bookings from a campaign show up in its stats.</li>
+    <li>SMS: keep it under 160 characters and always say who you are. “Reply STOP” is added for you.</li>
+    <li>Schedule weekend promos for Tuesday–Wednesday evenings, when parents plan.</li>
+  </Guide>
+
   <div class="grid gap-3 grid-cols-2 lg:grid-cols-5 mb-6">
-    <div class="kpi"><p class="kpi-label">Audience</p><p class="kpi-value">{aud.email}<span class="text-sm text-ink-2 font-medium"> email · {aud.sms} SMS</span></p><p class="hint">opted in of {aud.all} customers</p></div>
+    <div class="kpi"><p class="kpi-label">Opted-in audience</p><p class="kpi-value">{aud.email}<span class="text-sm text-ink-2 font-medium"> email · {aud.sms} SMS</span></p><p class="hint">of {aud.all} customers</p></div>
     <div class="kpi"><p class="kpi-label">Messages (30d)</p><p class="kpi-value">{m30.n}</p><p class="hint">{m30.email} email · {m30.sms} SMS</p></div>
     <div class="kpi"><p class="kpi-label">Open rate</p><p class="kpi-value">{rate(totals.open, totals.sent)}</p></div>
     <div class="kpi"><p class="kpi-label">Click rate</p><p class="kpi-value">{rate(totals.click, totals.sent)}</p></div>
@@ -72,32 +113,33 @@ const rate = (a: number, b: number) => (b ? `${Math.round((a / b) * 100)}%` : '�
   </div>
 
   <section id="automations" class="mb-6 scroll-mt-24" aria-labelledby="auto-h">
-    <div class="flex items-end gap-2 mb-3"><h2 id="auto-h" class="font-bold text-lg">Automations</h2><p class="text-sm text-ink-2">Set once, run every day.</p></div>
+    <div class="flex flex-wrap items-end gap-x-2 mb-3"><h2 id="auto-h" class="font-bold text-lg">Automations</h2><p class="text-sm text-ink-2">Set once, run every day.</p></div>
     <div class="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
       {AUTOMATIONS.map((a) => {
         const c = autos.find((x) => x.kind === a.kind)!;
         const on = c.status === 'automated';
         return (
-          <div class:list={['card p-4 flex flex-col', on && 'ring-2 ring-brand/20']}>
+          <div class:list={['card p-4 flex flex-col transition-shadow', on && 'ring-2 ring-brand/25 shadow-[0_8px_24px_-12px_rgba(91,60,245,.45)]']}>
             <div class="flex items-start gap-2">
-              <span class:list={['grid place-items-center size-9 rounded-xl shrink-0', on ? 'bg-brand text-white' : 'bg-canvas text-ink-2']}><Icon name={a.kind === 'birthday' ? 'gift' : a.kind === 'review' ? 'star' : a.kind === 'abandoned' ? 'clock' : 'sparkle'} size={18} /></span>
+              <span class:list={['grid place-items-center size-9 rounded-xl shrink-0 transition-colors', on ? 'bg-brand text-white' : 'bg-canvas text-ink-2']}><Icon name={a.kind === 'birthday' ? 'gift' : a.kind === 'review' ? 'star' : a.kind === 'abandoned' ? 'clock' : 'sparkle'} size={18} /></span>
               <div class="min-w-0">
                 <p class="font-semibold text-sm leading-tight">{c.name}</p>
                 <p class="text-xs text-ink-2 mt-0.5">{a.when} · {c.channel.toUpperCase()}</p>
               </div>
             </div>
-            <p class="text-xs text-ink-2 mt-3 flex-1">{c.sentCount} sent{c.bookingsAttributed ? ` · ${c.bookingsAttributed} bookings` : ''}</p>
-            <div class="flex items-center gap-2 mt-3">
+            <p class="text-xs text-ink-2 mt-3 flex-1">{AUTO_WHY[a.kind]}</p>
+            <p class="text-xs font-semibold mt-2">{c.sentCount} sent{c.bookingsAttributed ? ` · ${c.bookingsAttributed} bookings` : ''}</p>
+            <div class="flex items-center gap-2 mt-3 pt-3 border-t border-line">
               {canEdit && (
-                <form method="post">
+                <form method="post" data-no-busy>
                   <input type="hidden" name="_action" value="toggle" /><input type="hidden" name="id" value={c.id} /><input type="hidden" name="on" value={on ? '0' : '1'} />
-                  <button role="switch" aria-checked={on ? 'true' : 'false'} aria-label={`${c.name}: ${on ? 'on' : 'off'}`} class:list={['relative inline-flex h-7 w-12 items-center rounded-full transition-colors cursor-pointer', on ? 'bg-brand' : 'bg-line']}>
+                  <button role="switch" aria-checked={on ? 'true' : 'false'} aria-label={`${c.name}`} class:list={['relative inline-flex h-7 w-12 items-center rounded-full transition-colors cursor-pointer', on ? 'bg-brand' : 'bg-line']}>
                     <span class:list={['inline-block size-5 rounded-full bg-white shadow transition-transform', on ? 'translate-x-6' : 'translate-x-1']}></span>
                   </button>
                 </form>
               )}
-              <span class="text-xs font-semibold">{on ? 'On' : 'Off'}</span>
-              <a class="ml-auto text-xs text-brand font-semibold" href={`/app/marketing/${c.id}`}>Edit message</a>
+              <span class:list={['text-xs font-bold', on ? 'text-brand' : 'text-ink-2']}>{on ? 'On' : 'Off'}</span>
+              <a class="ml-auto text-xs text-brand font-semibold" href={`/app/marketing/${c.id}`}>Edit message →</a>
             </div>
           </div>
         );
@@ -106,44 +148,61 @@ const rate = (a: number, b: number) => (b ? `${Math.round((a / b) * 100)}%` : '�
   </section>
 
   <div class="grid gap-6 lg:grid-cols-[1fr_340px]">
-    <section class="card overflow-hidden" aria-labelledby="camp-h">
+    <section class="card overflow-hidden min-w-0" aria-labelledby="camp-h">
       <h2 id="camp-h" class="font-bold px-4 py-3 border-b border-line">Broadcasts</h2>
-      {broadcasts.length === 0 ? <p class="p-6 text-sm text-ink-2">No broadcasts yet. Create one — “Weekend availability” to past customers is a great first send.</p> : (
-        <div class="overflow-x-auto">
-          <table class="table min-w-[640px]">
+      {broadcasts.length === 0 ? (
+        <Empty icon="megaphone" title="Send your first broadcast" text="A “weekend availability” email to past customers is the easiest first win — it takes two minutes and costs nothing." cta={canEdit ? { href: '#new-campaign', label: 'Create a campaign' } : undefined} learn={{ href: '/app/customers', label: 'See your customers' }} />
+      ) : <>
+        <ul class="md:hidden divide-y divide-line">
+          {broadcasts.map((c) => (
+            <li><a href={`/app/marketing/${c.id}`} class="block px-4 py-3 hover:bg-canvas">
+              <div class="flex items-start gap-2"><span class="font-semibold flex-1 min-w-0">{c.name}</span><span class:list={['chip', STATUS[c.status]]}>{c.status}</span></div>
+              <p class="text-xs text-ink-2 mt-0.5">{c.channel.toUpperCase()} · {segmentLabel(c.segment)}{c.status === 'scheduled' ? ` · ${fmtDateTime(c.scheduledAt, t.timezone)}` : ''}</p>
+              <p class="text-xs mt-1.5 flex gap-3"><span><strong>{c.sentCount}</strong> sent</span><span><strong>{c.clickCount}</strong> clicks</span><span class="text-mint"><strong>{c.bookingsAttributed}</strong> bookings</span>{c.id in recips && <span class="text-ink-2">{recips[c.id]} recipients</span>}</p>
+            </a></li>
+          ))}
+        </ul>
+        <div class="overflow-x-auto hidden md:block">
+          <table class="table">
             <thead><tr><th>Campaign</th><th>Status</th><th class="text-right">Sent</th><th class="text-right">Opens</th><th class="text-right">Clicks</th><th class="text-right">Bookings</th></tr></thead>
             <tbody>
               {broadcasts.map((c) => (
-                <tr>
+                <tr class="hover:bg-canvas/60">
                   <td><a class="font-semibold hover:text-brand" href={`/app/marketing/${c.id}`}>{c.name}</a><p class="text-xs text-ink-2">{c.channel.toUpperCase()} · {segmentLabel(c.segment)}{c.id in recips ? ` · ${recips[c.id]} recipients` : ''}</p></td>
                   <td><span class:list={['chip', STATUS[c.status]]}>{c.status}</span>{c.status === 'scheduled' && <p class="text-xs text-ink-2 mt-0.5">{fmtDateTime(c.scheduledAt, t.timezone)}</p>}</td>
                   <td class="text-right tabular-nums">{c.sentCount}</td>
                   <td class="text-right tabular-nums">{c.openCount}</td>
                   <td class="text-right tabular-nums">{c.clickCount}</td>
-                  <td class="text-right tabular-nums">{c.bookingsAttributed}</td>
+                  <td class="text-right tabular-nums font-semibold text-mint">{c.bookingsAttributed}</td>
                 </tr>
               ))}
             </tbody>
           </table>
         </div>
-      )}
+      </>}
     </section>
 
     {canEdit && (
-      <form method="post" class="card p-4 space-y-3 h-fit">
-        <h2 class="font-bold">New campaign</h2>
+      <form method="post" id="new-campaign" class="card p-4 space-y-3 h-fit scroll-mt-24" novalidate>
+        <h2 class="font-bold">{follow ? 'Create the follow-up' : 'New campaign'}</h2>
+        {follow && <p class="text-xs text-ink-2 -mt-2">Following up on “{follow.name}” — we switched the channel so it lands somewhere new.</p>}
         <input type="hidden" name="_action" value="create" />
-        <div><label class="label" for="name">Name</label><input class="input" id="name" name="name" required maxlength="100" placeholder="Weekend availability — May" /></div>
+        <div><label class="label" for="name">Name</label><input class="input" id="name" name="name" value={values.name} required maxlength="100" placeholder="Weekend availability — May" {...invalid(errors, 'name')} />{errors.name && <p id="name-err" class="g-err">{errors.name}</p>}</div>
         <fieldset><legend class="label">Channel</legend>
-          <div class="flex gap-4 text-sm">
-            <label class="flex items-center gap-2"><input type="radio" name="channel" value="email" checked class="accent-[var(--color-brand)]" />Email</label>
-            <label class="flex items-center gap-2"><input type="radio" name="channel" value="sms" class="accent-[var(--color-brand)]" />SMS</label>
+          <div class="grid grid-cols-2 gap-2">
+            {(['email', 'sms'] as const).map((ch) => (
+              <label class="rounded-xl border border-line p-2.5 text-sm cursor-pointer has-[:checked]:border-brand has-[:checked]:bg-brand-soft/40 has-[:focus-visible]:ring-2 has-[:focus-visible]:ring-brand/40">
+                <input type="radio" name="channel" value={ch} checked={values.channel === ch} class="sr-only" />
+                <span class="font-semibold flex items-center gap-1.5"><Icon name={ch === 'email' ? 'message' : 'phone'} size={14} />{ch === 'email' ? 'Email' : 'SMS'}</span>
+                <span class="block text-xs text-ink-2">{ch === 'email' ? `${aud.email} opted in` : `${aud.sms} opted in`}</span>
+              </label>
+            ))}
           </div>
         </fieldset>
-        <div><label class="label" for="segment">Segment</label><select class="input" id="segment" name="segment">{SEGMENTS.map((s) => <option value={s.key}>{s.label}</option>)}</select></div>
-        <div><label class="label" for="notBookedDays">N days <span class="font-normal text-ink-2">(for “haven’t booked”)</span></label><input class="input" type="number" id="notBookedDays" name="notBookedDays" value="180" min="7" max="3650" /></div>
-        <p class="hint">Only customers who opted in to that channel receive it. Merge tags: {MERGE_TAGS.map((m) => <code class="mr-1">{`{{${m}}}`}</code>)}</p>
-        <button class="btn-primary w-full"><Icon name="plus" size={16} />Create & edit</button>
+        <div><label class="label" for="segment">Who gets it</label><select class="input" id="segment" name="segment">{SEGMENTS.map((s) => <option value={s.key} selected={values.segment === s.key}>{s.label}</option>)}</select></div>
+        <div><label class="label" for="notBookedDays">N days <span class="font-normal text-ink-2">(for “haven’t booked in N days”)</span></label><input class="input" type="number" id="notBookedDays" name="notBookedDays" value={values.notBookedDays} min="7" max="3650" {...invalid(errors, 'notBookedDays')} />{errors.notBookedDays && <p id="notBookedDays-err" class="g-err">{errors.notBookedDays}</p>}</div>
+        <p class="hint">Only opted-in customers receive it. You’ll write and preview the message next.</p>
+        <button class="btn-primary w-full" data-busy="Creating…"><Icon name="plus" size={16} />Create & write message</button>
       </form>
     )}
   </div>

@@ -159,7 +159,7 @@ export default function AvailabilityChecker(p: Props) {
           {endField}
           <button type="submit" class="s-btn s-btn-cta s-btn-lg w-full col-span-2">{p.submitLabel ?? 'See what’s available'}</button>
         </div>
-        <div class="mt-2.5">{status}</div>
+        {!(p.initial?.day && day === p.initial.day && zip === (p.initial.zip ?? '') && start === p.initial.startHour && endFixed === p.initial.endHour) && <div class="mt-2.5">{status}</div>}
       </form>
     );
   }

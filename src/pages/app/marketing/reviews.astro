@@ -4,25 +4,35 @@ import { z } from 'zod';
 import AppLayout from '../../../layouts/AppLayout.astro';
 import Icon from '../../../components/Icon.astro';
 import Tabs from './_Tabs.astro';
+import NextSteps from '../../../components/growth/NextSteps.astro';
+import Guide from '../../../components/growth/Guide.astro';
+import Empty from '../../../components/growth/Empty.astro';
+import Enhance from '../../../components/growth/Enhance.astro';
 import { getDb, schema } from '../../../db/client';
 import { formData, str, int, parse } from '../../../lib/forms';
 import { ensureAutomations, runReviewRequests } from '../../../lib/growth/campaigns';
-import { ctx, done, fmtDay } from '../../../lib/growth/app';
+import { siteOrigin } from '../../../lib/tenant';
+import { ctx, done, go, invalid, fmtDay } from '../../../lib/growth/app';
 
 const { t, tenantId, canEdit } = ctx(Astro);
 const db = await getDb();
 const SOURCES = ['google', 'facebook', 'yelp', 'direct'] as const;
 const Review = z.object({ author: z.string().min(1, 'Author is required').max(80), rating: z.number().int().min(1).max(5), body: z.string().max(2000), source: z.enum(SOURCES) });
 
+let errors: Record<string, string> = {};
+let values: Record<string, string> = { author: '', rating: '5', body: '', source: 'google' };
 const f = await formData(Astro);
 if (f) {
   if (!canEdit) return done(Astro, 'Only owners and managers can manage reviews.', undefined, 'error');
   const action = str(f, '_action', 20);
   if (action === 'add') {
-    const r = parse(Review, { author: str(f, 'author', 80), rating: int(f, 'rating', 5), body: str(f, 'body', 2000), source: str(f, 'source', 10) });
-    if (!r.ok) return done(Astro, Object.values(r.errors)[0], undefined, 'error');
-    await db.insert(schema.reviews).values({ tenantId, ...r.data, featured: r.data.rating >= 4 });
-    return done(Astro, 'Review added.');
+    values = { author: str(f, 'author', 80), rating: str(f, 'rating', 1), body: str(f, 'body', 2000), source: str(f, 'source', 10) };
+    const r = parse(Review, { ...values, rating: int(f, 'rating', 5) });
+    if (!r.ok) { errors = r.errors; Astro.response.status = 422; }
+    else {
+      await db.insert(schema.reviews).values({ tenantId, ...r.data, featured: r.data.rating >= 4 });
+      return done(Astro, r.data.rating >= 4 ? `Added ${r.data.author}’s review and featured it on your site.` : 'Review added (not featured — feature it any time).');
+    }
   }
   if (action === 'import') {
     const lines = str(f, 'csv', 50_000).split(/\r?\n/).map((l) => l.trim()).filter(Boolean).slice(0, 500);
@@ -35,17 +45,17 @@ if (f) {
     }
     if (!rows.length) return done(Astro, 'Paste at least one review.', undefined, 'error');
     await db.insert(schema.reviews).values(rows.map((r) => ({ tenantId, ...r, featured: r.rating >= 4 })));
-    return done(Astro, `Imported ${rows.length} review${rows.length === 1 ? '' : 's'}.`);
+    return go(Astro, `/app/marketing/reviews?done=imported&n=${rows.length}`);
   }
   if (action === 'request') {
     if (!t.settings.googleReviewUrl) return done(Astro, 'Add your Google review link in Settings first.', undefined, 'error');
     const autos = await ensureAutomations(db, tenantId);
     const camp = autos.find((a) => a.kind === 'review')!;
     const n = await runReviewRequests(db, t, camp, { minHoursAfter: 0, maxDays: 30 });
-    return done(Astro, n ? `Sent ${n} review request${n === 1 ? '' : 's'} — same Google link for everyone.` : 'No completed bookings from the last 30 days are waiting for a review request.', undefined, n ? 'ok' : 'error');
+    return n ? go(Astro, `/app/marketing/reviews?done=requested&n=${n}`) : done(Astro, 'No completed bookings from the last 30 days are waiting for a review request.', undefined, 'error');
   }
   const id = str(f, 'id', 40);
-  if (!z.uuid().safeParse(id).success) return done(Astro, 'Unknown review.', undefined, 'error');
+  if (action !== 'add' && !z.uuid().safeParse(id).success) return done(Astro, 'Unknown review.', undefined, 'error');
   const where = and(eq(schema.reviews.id, id), eq(schema.reviews.tenantId, tenantId));
   if (action === 'feature' || action === 'unfeature') {
     await db.update(schema.reviews).set({ featured: action === 'feature' }).where(where);
@@ -55,7 +65,7 @@ if (f) {
     await db.delete(schema.reviews).where(where);
     return done(Astro, 'Review deleted.');
   }
-  return done(Astro, 'Unknown action.', undefined, 'error');
+  if (action !== 'add') return done(Astro, 'Unknown action.', undefined, 'error');
 }
 
 const reviews = await db.select().from(schema.reviews).where(eq(schema.reviews.tenantId, tenantId)).orderBy(desc(schema.reviews.createdAt)).limit(300);
@@ -64,10 +74,27 @@ const fives = reviews.filter((r) => r.rating === 5).length;
 const since = new Date(Date.now() - 30 * 86_400_000);
 const [req] = await db.select({ n: sql<number>`count(*)::int` }).from(schema.bookings).where(and(eq(schema.bookings.tenantId, tenantId), isNotNull(schema.bookings.reviewRequestedAt), gte(schema.bookings.reviewRequestedAt, since)));
 const [waiting] = await db.select({ n: sql<number>`count(*)::int` }).from(schema.bookings).where(and(eq(schema.bookings.tenantId, tenantId), eq(schema.bookings.status, 'completed'), sql`${schema.bookings.reviewRequestedAt} is null`, gte(schema.bookings.endsAt, since)));
+const doneKey = Astro.url.searchParams.get('done');
+const doneN = Number(Astro.url.searchParams.get('n') ?? 0);
+const [autoReview] = await db.select().from(schema.campaigns).where(and(eq(schema.campaigns.tenantId, tenantId), eq(schema.campaigns.kind, 'review'))).limit(1);
+const origin = await siteOrigin(t);
 const stars = (n: number) => '★★★★★'.slice(0, n) + '☆☆☆☆☆'.slice(0, 5 - n);
 ---
 <AppLayout title="Campaigns & Reviews" section="marketing" subtitle="Review volume wins the map pack. Ask every customer, the same way, every time.">
+  <Enhance />
   <Tabs active="reviews" />
+  {doneKey === 'requested' && <NextSteps title={`${doneN} review request${doneN === 1 ? '' : 's'} sent`} text="Everyone got the same Google link. Most reviews arrive within 48 hours — import them here when they do so they show on your site." dismissHref="/app/marketing/reviews"
+    actions={[{ href: '#import', label: 'Import new reviews', icon: 'star', primary: true }, { href: autoReview ? `/app/marketing/${autoReview.id}` : '/app/marketing#automations', label: autoReview?.status === 'automated' ? 'Edit the automatic request' : 'Make this automatic', icon: 'bolt' }]} />}
+  {doneKey === 'imported' && <NextSteps title={`Imported ${doneN} review${doneN === 1 ? '' : 's'}`} text="4- and 5-star reviews are featured on your website automatically. Share your best one to social." dismissHref="/app/marketing/reviews"
+    actions={[{ href: `/app/social?occasion=${encodeURIComponent('happy customer review')}`, label: 'Share a review on social', icon: 'share', primary: true }, { href: origin + '/', label: 'See them on your site', icon: 'external', external: true }]} />}
+  <Guide why="Review count and recency are among the strongest map-pack signals, and parents read them before booking. Asking right after the party, every time, is what builds volume.">
+    <li>Ask the day after the party, while it’s fresh — the review automation does it for you.</li>
+    <li>Send everyone the same link. Filtering unhappy customers out first (“review gating”) breaks Google policy.</li>
+    <li>Reply to every review on Google, especially the critical ones — future customers read replies.</li>
+    <li>Feature 4- and 5-star reviews on your site; un-feature any that mention private details.</li>
+    <li>Never offer discounts in exchange for reviews.</li>
+    <li>Import reviews from Google, Facebook and Yelp so your site shows them all.</li>
+  </Guide>
   <div class="grid gap-3 grid-cols-2 lg:grid-cols-4 mb-6">
     <div class="kpi"><p class="kpi-label">Average rating</p><p class="kpi-value">{avg ? avg.toFixed(2) : '—'} <span class="text-sun text-lg">★</span></p></div>
     <div class="kpi"><p class="kpi-label">Reviews</p><p class="kpi-value">{reviews.length}</p><p class="hint">{fives} five-star</p></div>
@@ -78,7 +105,7 @@ const stars = (n: number) => '★★★★★'.slice(0, n) + '☆☆☆☆☆'.s
   <div class="grid gap-6 lg:grid-cols-[1fr_340px]">
     <section class="card overflow-hidden" aria-labelledby="rev-h">
       <h2 id="rev-h" class="font-bold px-4 py-3 border-b border-line">All reviews</h2>
-      {reviews.length === 0 ? <p class="p-6 text-sm text-ink-2">No reviews yet. Import your Google reviews or send review requests.</p> : (
+      {reviews.length === 0 ? <Empty icon="star" title="No reviews yet" text="Import the Google reviews you already have, then switch on automatic review requests so every party brings in another." cta={{ href: '#import', label: 'Import reviews' }} learn={{ href: '/app/marketing#automations', label: 'Turn on review requests' }} /> : (
         <ul class="divide-y divide-line">
           {reviews.map((r) => (
             <li class="p-4 flex flex-wrap gap-3">
@@ -91,7 +118,7 @@ const stars = (n: number) => '★★★★★'.slice(0, n) + '☆☆☆☆☆'.s
                 <div class="flex gap-1.5 items-start">
                   <form method="post"><input type="hidden" name="id" value={r.id} /><input type="hidden" name="_action" value={r.featured ? 'unfeature' : 'feature'} />
                     <button class:list={['min-h-9 px-3 text-xs', r.featured ? 'btn-primary' : 'btn-ghost']} aria-pressed={r.featured ? 'true' : 'false'}><Icon name="star" size={14} />{r.featured ? 'Featured' : 'Feature'}</button></form>
-                  <form method="post" onsubmit="return confirm('Delete this review?')"><input type="hidden" name="id" value={r.id} /><input type="hidden" name="_action" value="delete" /><button class="btn-danger min-h-9 px-3 text-xs" aria-label={`Delete review by ${r.author}`}>Delete</button></form>
+                  <form method="post" data-confirm={`Delete ${r.author}’s review? This can’t be undone.`}><input type="hidden" name="id" value={r.id} /><input type="hidden" name="_action" value="delete" /><button class="btn-danger min-h-9 px-3 text-xs" aria-label={`Delete review by ${r.author}`}>Delete</button></form>
                 </div>
               )}
             </li>
@@ -106,26 +133,26 @@ const stars = (n: number) => '★★★★★'.slice(0, n) + '☆☆☆☆☆'.s
         <p class="text-sm text-white/75">Texts or emails your Google review link to customers with completed bookings in the last 30 days who haven’t been asked.</p>
         <p class="text-xs text-white/60">Everyone gets the same link — no filtering happy customers first (“review gating” breaks Google’s rules and can get reviews removed).</p>
         {t.settings.googleReviewUrl ? <p class="text-xs text-white/60 break-all">Link: {t.settings.googleReviewUrl}</p> : <p class="text-xs text-sun">Add your Google review link in Settings first.</p>}
-        {canEdit && <form method="post"><input type="hidden" name="_action" value="request" /><button class="btn-pop w-full" disabled={!waiting.n}><Icon name="message" size={16} />Send to {waiting.n} customer{waiting.n === 1 ? '' : 's'}</button></form>}
+        {canEdit && <form method="post" data-confirm={`Send your Google review link to ${waiting.n} customer${waiting.n === 1 ? '' : 's'}?`}><input type="hidden" name="_action" value="request" /><button class="btn-pop w-full" disabled={!waiting.n} data-busy="Sending…"><Icon name="message" size={16} />Send to {waiting.n} customer{waiting.n === 1 ? '' : 's'}</button></form>}
       </div>
       {canEdit && <>
-        <form method="post" class="card p-4 space-y-3">
+        <form method="post" class="card p-4 space-y-3" novalidate>
           <h2 class="font-bold">Add a review</h2>
           <input type="hidden" name="_action" value="add" />
-          <div><label class="label" for="author">Author</label><input class="input" id="author" name="author" required maxlength="80" /></div>
+          <div><label class="label" for="author">Author</label><input class="input" id="author" name="author" value={values.author} required maxlength="80" {...invalid(errors, 'author')} />{errors.author && <p id="author-err" class="g-err">{errors.author}</p>}</div>
           <div class="grid grid-cols-2 gap-2">
-            <div><label class="label" for="rating">Rating</label><select class="input" id="rating" name="rating">{[5, 4, 3, 2, 1].map((n) => <option value={n}>{n} ★</option>)}</select></div>
-            <div><label class="label" for="source">Source</label><select class="input" id="source" name="source">{SOURCES.map((s) => <option value={s}>{s}</option>)}</select></div>
+            <div><label class="label" for="rating">Rating</label><select class="input" id="rating" name="rating">{[5, 4, 3, 2, 1].map((n) => <option value={n} selected={values.rating === String(n)}>{n} ★</option>)}</select></div>
+            <div><label class="label" for="source">Source</label><select class="input" id="source" name="source">{SOURCES.map((s) => <option value={s} selected={values.source === s}>{s}</option>)}</select></div>
           </div>
-          <div><label class="label" for="body">Review</label><textarea class="input" id="body" name="body" rows="3" maxlength="2000"></textarea></div>
-          <button class="btn-primary w-full">Add review</button>
+          <div><label class="label" for="body">Review</label><textarea class="input" id="body" name="body" rows="3" maxlength="2000">{values.body}</textarea></div>
+          <button class="btn-primary w-full" data-busy="Adding…">Add review</button>
         </form>
-        <form method="post" class="card p-4 space-y-3">
+        <form method="post" id="import" class="card p-4 space-y-3 scroll-mt-24">
           <h2 class="font-bold">Import reviews</h2>
           <input type="hidden" name="_action" value="import" />
           <label class="label" for="csv">One per line: <code>Author | rating | text | source</code></label>
           <textarea class="input font-mono text-xs" id="csv" name="csv" rows="5" placeholder="Maria P. | 5 | On time and spotless! | google"></textarea>
-          <button class="btn-ghost w-full">Import</button>
+          <button class="btn-ghost w-full" data-busy="Importing…">Import</button>
         </form>
       </>}
     </aside>

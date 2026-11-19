@@ -133,23 +133,23 @@ export default function BookingBuilder(p: BuilderProps) {
           </div>
           {netErr && <p class="text-sm text-red-700 mt-2">{netErr}</p>}
           <FieldErr id="lines-err" msg={e.lines} />
-          <ul class="mt-4 grid gap-2 sm:grid-cols-2">
+          <ul class="mt-4 grid gap-2 2xl:grid-cols-2">
             {items.map((it) => {
               const free = q?.free?.[it.id];
               const n = cart[it.id] ?? 0;
               const over = conflicts.has(it.id);
               const out = free === 0 && n === 0;
               return (
-                <li class={`rounded-xl border p-3 flex items-center gap-3 ${n ? 'border-brand bg-brand-soft/40' : 'border-line'} ${over ? '!border-red-300 !bg-red-50' : ''}`}>
+                <li class={`min-w-0 rounded-xl border p-3 flex items-center gap-3 ${n ? 'border-brand bg-brand-soft/40' : 'border-line'} ${over ? '!border-red-300 !bg-red-50' : ''}`}>
                   {it.image ? <img src={it.image} alt="" class="size-12 rounded-lg object-cover bg-canvas shrink-0" loading="lazy" /> : <span class="size-12 rounded-lg bg-canvas shrink-0" />}
                   <div class="min-w-0 flex-1">
-                    <p class={`text-sm font-semibold truncate ${out ? 'text-ink-2' : ''}`}>{it.name}</p>
-                    <p class="text-xs text-ink-2">{money(it.priceCents)} · {it.kind === 'package' ? 'Package' : it.kind === 'addon' ? 'Add-on' : it.category}</p>
+                    <p class={`text-sm font-semibold line-clamp-2 ${out ? 'text-ink-2' : ''}`}>{it.name}</p>
+                    <p class="text-xs text-ink-2 truncate">{money(it.priceCents)} · {it.kind === 'package' ? 'Package' : it.kind === 'addon' ? 'Add-on' : it.category}</p>
                     <p class={`text-xs font-semibold mt-0.5 ${free === undefined ? 'text-ink-2' : free === 0 ? 'text-red-700' : 'text-green-700'}`}>
                       {free === undefined ? '…' : free === 0 ? 'Booked out' : `${free} of ${it.kind === 'package' ? free : it.quantity} free`}{over && ' — over capacity'}
                     </p>
                   </div>
-                  <div class="flex items-center gap-1" role="group" aria-label={`Quantity of ${it.name}`}>
+                  <div class="flex items-center gap-1 shrink-0" role="group" aria-label={`Quantity of ${it.name}`}>
                     <button type="button" class="btn-ghost !px-0 size-9 !min-h-9" aria-label={`Remove one ${it.name}`} disabled={!n} onClick={() => bump(it.id, -1)}>−</button>
                     <span class="w-6 text-center text-sm font-bold tabular-nums" aria-live="polite">{n}</span>
                     <button type="button" class="btn-ghost !px-0 size-9 !min-h-9" aria-label={`Add one ${it.name}`} disabled={free !== undefined && n >= free} onClick={() => bump(it.id, 1)}>+</button>

@@ -8,7 +8,6 @@ import StatusChip from '../../../components/ops/StatusChip.astro';
 import WeatherBadge from '../../../components/ops/WeatherBadge.astro';
 import Crumbs from '../../../components/ops/Crumbs.astro';
 import NextSteps from '../../../components/ops/NextSteps.astro';
-import Help from '../../../components/ops/Help.astro';
 import SubmitGuard from '../../../components/ops/SubmitGuard.astro';
 import { getDb, schema } from '../../../db/client';
 import { money } from '../../../lib/pricing';
@@ -187,7 +186,7 @@ const linkForm = { _action: 'notify', kind: 'link', channel: c?.phone ? 'sms' : 
         </dl>
       </section>
 
-      <div class="grid gap-6 md:grid-cols-2">
+      <div class="grid gap-6 2xl:grid-cols-2">
         <section class="card p-5" aria-labelledby="pay-h">
           <h2 id="pay-h" class="font-bold text-lg">Payments</h2>
           {pays.length === 0 ? <p class="text-sm text-ink-2 mt-2">No payments yet.</p> : (

@@ -57,7 +57,7 @@ const confettiColors = ['var(--c-primary)', 'var(--c-accent)', '#FFC928', '#22A5
             {Array.from({ length: 28 }, (_, i) => <i style={`--x:${(i * 37) % 100}%;--d:${(i % 7) * 0.18}s;--r:${(i * 53) % 360}deg;--c:${confettiColors[i % 5]}`} />)}
           </div>
         )}
-        {justPaid && paidUp && <script is:inline define:vars={{ slug: t.slug }}>try{localStorage.removeItem('bos:cart:'+slug);}catch(e){}</script>}
+        {justPaid && paidUp && <script is:inline define:vars={{ slug: t.slug }}>try{localStorage.removeItem('bos:cart:'+slug);sessionStorage.removeItem('bos:co:'+slug);}catch(e){}</script>}
         <div class="s-wrap pt-10 pb-12 relative">
           <p class={`s-chip ${statusInfo.tone === 'ok' ? 's-chip-ok' : statusInfo.tone === 'bad' ? 's-chip-bad' : 's-chip-warn'}`}>{statusInfo.label} · #{b.number}</p>
           <h1 class="s-h1 mt-4 !text-[clamp(2.1rem,5.5vw,3.8rem)] max-w-3xl">

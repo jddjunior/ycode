@@ -68,7 +68,7 @@ const wx = (await weatherFor(t, [day]))[day];
 const left = route.ordered.filter((x) => !x.done).length;
 const nextStop = route.ordered.find((x) => !x.done);
 ---
-<CrewLayout title={day === today ? 'Today’s stops' : day === addDays(today, 1) ? 'Tomorrow’s stops' : `Stops · ${shortDay(day)}`} subtitle={`${shortDay(day)} · ${route.ordered.length} stops · ${left} to go`}>
+<CrewLayout title={day === today ? 'Today’s stops' : day === addDays(today, 1) ? 'Tomorrow’s stops' : `Stops · ${shortDay(day)}`} subtitle={`${[today, addDays(today, 1)].includes(day) ? shortDay(day) + ' · ' : ''}${route.ordered.length} stop${route.ordered.length === 1 ? '' : 's'} · ${left ? `${left} to go` : 'all done!'}`}>
   <nav class="flex items-center gap-2" aria-label="Day">
     <a href={`/app/crew?day=${addDays(day, -1)}`} class="btn-ghost px-3" aria-label="Previous day"><Icon name="arrow" class="rotate-180" size={18} /></a>
     <a href="/app/crew" class:list={['btn-ghost flex-1', day === today && '!bg-brand-soft !text-brand !border-brand/30']}>Today</a>
@@ -95,7 +95,7 @@ const nextStop = route.ordered.find((x) => !x.done);
   {route.ordered.length > 0 && route.runs.some((r) => r.mapsUrl) && (
     <div class="grid gap-2 mt-4">
       {route.runs.filter((r) => r.mapsUrl).map((r) => (
-        <a href={r.mapsUrl} target="_blank" rel="noopener" class="btn-primary w-full !min-h-14 text-base"><Icon name="map" />Start {r.label.toLowerCase()} in Maps</a>
+        <a href={r.mapsUrl} target="_blank" rel="noopener" class:list={[r.kind === 'dropoff' ? 'btn-primary' : 'btn-ghost', 'w-full !min-h-14 text-base']}><Icon name="map" />Start {r.label.toLowerCase()} in Maps</a>
       ))}
     </div>
   )}

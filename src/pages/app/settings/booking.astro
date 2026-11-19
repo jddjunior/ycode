@@ -150,6 +150,6 @@ const hl = (h: number) => (h === 0 || h === 24 ? '12 AM' : h === 12 ? '12 PM' : 
         <div><label class="label" for="monthlyGoal">Monthly revenue goal ($)</label><input id="monthlyGoal" name="monthlyGoal" class="input tabular-nums" inputmode="decimal" value={v.monthlyGoal} placeholder="Auto" disabled={ro} {...inv('monthlyGoal')} /><Err id="monthlyGoal-err" msg={errors.monthlyGoal} /><p class="hint">Shown as the progress bar on your Game Plan.</p></div>
       </div>
     </section>
-    {canManage && <div class="flex justify-end sticky bottom-4"><button class="btn-primary shadow-lg" data-busy-label="Saving…"><Icon name="check" size={16} />Save booking rules</button></div>}
+    {canManage && <div class="sticky bottom-0 z-10 -mx-1 px-1 py-3 flex items-center justify-end gap-3 bg-canvas/90 backdrop-blur border-t border-line"><p class="text-xs text-ink-2 mr-auto hidden sm:block">Changes apply to new quotes immediately.</p><button class="btn-primary" data-busy-label="Saving…"><Icon name="check" size={16} />Save booking rules</button></div>}
   </form>
 </Shell>

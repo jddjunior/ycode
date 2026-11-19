@@ -77,6 +77,34 @@ const ld = [productLd(item, ctx.origin, url, t), breadcrumbLd([{ name: 'Home', u
           {item.images.length > 1 && <p class="mt-2 text-xs s-sub font-semibold">Swipe for {item.images.length} photos</p>}
         </div>
       </div>
+      <aside class="lg:sticky lg:top-24 lg:col-start-2 lg:row-start-1 lg:row-span-2 self-start" aria-label="Book this rental">
+        <div class="s-card p-5 sm:p-6">
+          <p class="text-xs font-extrabold uppercase tracking-wider s-sub">{kindLabel}{s.ageRange ? ` · ages ${s.ageRange}` : ''}</p>
+          <h1 class="font-display text-[1.9rem] sm:text-[2.2rem] font-bold leading-[1.05] mt-1.5">{item.name}</h1>
+          {item.tagline && <p class="s-sub mt-2">{item.tagline}</p>}
+          {ctx.rating.count > 0 && <p class="mt-2 text-sm font-bold flex items-center gap-2"><Stars rating={ctx.rating.avg} /> {ctx.rating.avg.toFixed(1)} · {ctx.rating.count} reviews</p>}
+          <p class="mt-4 flex items-baseline gap-2 flex-wrap">
+            <span class="s-price text-4xl">{money(item.priceCents)}</span>
+            <span class="text-sm font-bold s-sub">per event · up to {item.baseHours} hrs</span>
+          </p>
+          <p class="text-xs font-semibold s-sub mt-1">
+            {item.extraHourCents ? `Extra hours ${money(item.extraHourCents)}/hr. ` : ''}{item.overnightCents ? `Overnight ${money(item.overnightCents)}. ` : ''}Typical window {hourLabel(d.defaultStart)}–{hourLabel(d.defaultEnd)}.
+          </p>
+          <div class="mt-5">
+            <AvailabilityChecker client:load mode="item" slug={t.slug} api={ctx.api} base={ctx.base} idPrefix="buy" phone={t.phone || undefined}
+              minDay={d.minDay} maxDay={d.maxDay} defaultStart={d.defaultStart} defaultEnd={d.defaultEnd}
+              item={{ id: item.id, name: item.name, priceCents: item.priceCents, baseHours: item.baseHours, extraHourCents: item.extraHourCents, quantity: item.quantity }}
+              addons={addons.map((a) => ({ id: a.id, name: a.name, priceCents: a.priceCents, image: firstImage(a) }))}
+              depositText={depositText(t, money)} contactHref={ctx.href('/contact')}
+              similar={similarPool.slice(0, 8).map((i) => ({ id: i.id, name: i.name, href: ctx.href(ctx.itemPath(i)), priceCents: i.priceCents, image: firstImage(i) }))} />
+          </div>
+        </div>
+        <ul class="mt-4 grid grid-cols-3 gap-2 text-center text-xs font-bold">
+          <li class="s-tile p-3"><Icon name="truck" size={20} class="mx-auto mb-1 text-primary" />Setup included</li>
+          <li class="s-tile p-3"><Icon name="sparkle" size={20} class="mx-auto mb-1 text-primary" />Sanitized</li>
+          <li class="s-tile p-3"><Icon name="cloud" size={20} class="mx-auto mb-1 text-primary" />Weather-safe</li>
+        </ul>
+      </aside>
       <div class="min-w-0 grid gap-10 lg:col-start-1 lg:row-start-2">
 
         <section>
@@ -132,34 +160,6 @@ const ld = [productLd(item, ctx.origin, url, t), breadcrumbLd([{ name: 'Home', u
         </section>
       </div>
 
-      <aside class="lg:sticky lg:top-24 lg:col-start-2 lg:row-start-1 lg:row-span-2 self-start" aria-label="Book this rental">
-        <div class="s-card p-5 sm:p-6">
-          <p class="text-xs font-extrabold uppercase tracking-wider s-sub">{kindLabel}{s.ageRange ? ` · ages ${s.ageRange}` : ''}</p>
-          <h1 class="font-display text-[1.9rem] sm:text-[2.2rem] font-bold leading-[1.05] mt-1.5">{item.name}</h1>
-          {item.tagline && <p class="s-sub mt-2">{item.tagline}</p>}
-          {ctx.rating.count > 0 && <p class="mt-2 text-sm font-bold flex items-center gap-2"><Stars rating={ctx.rating.avg} /> {ctx.rating.avg.toFixed(1)} · {ctx.rating.count} reviews</p>}
-          <p class="mt-4 flex items-baseline gap-2 flex-wrap">
-            <span class="s-price text-4xl">{money(item.priceCents)}</span>
-            <span class="text-sm font-bold s-sub">per event · up to {item.baseHours} hrs</span>
-          </p>
-          <p class="text-xs font-semibold s-sub mt-1">
-            {item.extraHourCents ? `Extra hours ${money(item.extraHourCents)}/hr. ` : ''}{item.overnightCents ? `Overnight ${money(item.overnightCents)}. ` : ''}Typical window {hourLabel(d.defaultStart)}–{hourLabel(d.defaultEnd)}.
-          </p>
-          <div class="mt-5">
-            <AvailabilityChecker client:load mode="item" slug={t.slug} api={ctx.api} base={ctx.base} idPrefix="buy" phone={t.phone || undefined}
-              minDay={d.minDay} maxDay={d.maxDay} defaultStart={d.defaultStart} defaultEnd={d.defaultEnd}
-              item={{ id: item.id, name: item.name, priceCents: item.priceCents, baseHours: item.baseHours, extraHourCents: item.extraHourCents, quantity: item.quantity }}
-              addons={addons.map((a) => ({ id: a.id, name: a.name, priceCents: a.priceCents, image: firstImage(a) }))}
-              depositText={depositText(t, money)} contactHref={ctx.href('/contact')}
-              similar={similarPool.slice(0, 8).map((i) => ({ id: i.id, name: i.name, href: ctx.href(ctx.itemPath(i)), priceCents: i.priceCents, image: firstImage(i) }))} />
-          </div>
-        </div>
-        <ul class="mt-4 grid grid-cols-3 gap-2 text-center text-xs font-bold">
-          <li class="s-tile p-3"><Icon name="truck" size={20} class="mx-auto mb-1 text-primary" />Setup included</li>
-          <li class="s-tile p-3"><Icon name="sparkle" size={20} class="mx-auto mb-1 text-primary" />Sanitized</li>
-          <li class="s-tile p-3"><Icon name="cloud" size={20} class="mx-auto mb-1 text-primary" />Weather-safe</li>
-        </ul>
-      </aside>
     </div>
   </div>
 

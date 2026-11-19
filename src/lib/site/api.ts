@@ -47,7 +47,7 @@ export function bookingErrorResponse(e: unknown) {
   if (e instanceof BookingError) {
     const status = e.code === 'unavailable' ? 409 : 422;
     const message = e.code === 'rules' ? ruleMessage(String(e.detail ?? '')) : e.code === 'unavailable'
-      ? 'Someone just booked one of your items for that time. We’ve marked it below — pick another time or swap the item.'
+      ? 'Some items aren’t available in that quantity for your time (someone may have just booked them). We’ve marked them — adjust the cart or pick another time.'
       : e.message;
     return apiError(status, e.code, message, e.detail);
   }

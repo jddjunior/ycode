@@ -38,7 +38,7 @@ const { rating, tenant: t } = ctx;
       </div>
     </div>
     <div class="relative">
-      <div class="relative rounded-[calc(var(--r-card)*1.6)] overflow-hidden shadow-[0_40px_80px_-40px_rgba(0,0,0,.45)] aspect-[4/3] bg-muted rotate-[1.2deg] [[data-theme=mono]_&]:rotate-0 [[data-theme=arcade]_&]:rotate-0 [[data-theme=arcade]_&]:border-[3px] [[data-theme=arcade]_&]:border-ink [[data-theme=arcade]_&]:shadow-[8px_8px_0_var(--c-ink)]">
+      <div class="relative rounded-[calc(var(--r-card)*1.6)] overflow-hidden shadow-[0_40px_80px_-40px_rgba(0,0,0,.45)] aspect-[16/10] sm:aspect-[4/3] bg-muted sm:rotate-[1.2deg] [[data-theme=mono]_&]:rotate-0 [[data-theme=arcade]_&]:rotate-0 [[data-theme=arcade]_&]:border-[3px] [[data-theme=arcade]_&]:border-ink [[data-theme=arcade]_&]:shadow-[8px_8px_0_var(--c-ink)]">
         <img src={image} alt={`${t.name} bounce house set up in a ${t.city} backyard`} width="800" height="600" fetchpriority="high" class="w-full h-full object-cover" />
       </div>
       {badges.length > 0 && (

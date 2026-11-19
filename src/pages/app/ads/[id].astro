@@ -3,6 +3,9 @@ import { and, eq, sql } from 'drizzle-orm';
 import { z } from 'zod';
 import AppLayout from '../../../layouts/AppLayout.astro';
 import Icon from '../../../components/Icon.astro';
+import NextSteps from '../../../components/growth/NextSteps.astro';
+import Crumbs from '../../../components/growth/Crumbs.astro';
+import Enhance from '../../../components/growth/Enhance.astro';
 import { getDb, schema } from '../../../db/client';
 import type { AdCreative } from '../../../db/schema';
 import { formData, str, int, cents, bool } from '../../../lib/forms';
@@ -11,7 +14,8 @@ import { money } from '../../../lib/pricing';
 import { onManagedAdSpend } from '../../../lib/revenue';
 import { isValidDay } from '../../../lib/time';
 import { HEADLINE_MAX, DESCRIPTION_MAX, PRIMARY_MAX, validateCreative, matchType } from '../../../lib/growth/ads';
-import { ctx, done, pct } from '../../../lib/growth/app';
+import { ctx, done, go, pct } from '../../../lib/growth/app';
+import { siteOrigin } from '../../../lib/tenant';
 
 const { t, tenantId, canEdit } = ctx(Astro);
 const id = Astro.params.id ?? '';
@@ -24,6 +28,7 @@ const plan = PLANS[t.plan];
 const STATUSES = ['draft', 'pending_launch', 'live', 'paused', 'ended'] as const;
 const kwOk = (k: string) => k.length <= 80 && /^(\[[^\]"[]+\]|"[^"]+"|[^"[\]]+)$/.test(k);
 
+let creativeError = '';
 const f = await formData(Astro);
 if (f) {
   if (!canEdit) return done(Astro, 'Only owners and managers can edit campaigns.', undefined, 'error');
@@ -38,14 +43,19 @@ if (f) {
       finalUrl: str(f, `g${gi}_url`, 500) || g.finalUrl,
     }));
     const bad = groups.flatMap((g) => [...g.keywords, ...(g.negativeKeywords ?? [])]).find((k) => !kwOk(k));
-    if (bad) return done(Astro, `Keyword “${bad.slice(0, 40)}” isn’t valid. Use plain text, "phrase" or [exact].`, undefined, 'error');
-    if (groups.some((g) => !/^https:\/\/|^http:\/\/localhost/.test(g.finalUrl))) return done(Astro, 'Final URLs must start with https://', undefined, 'error');
     const primaryText = camp.network === 'meta' ? f.getAll('primary').map((x) => String(x).replace(/\s+/g, ' ').trim()).filter(Boolean).slice(0, 5) : undefined;
     const creative: AdCreative = { adGroups: groups, ...(primaryText ? { primaryText } : {}) };
-    const issues = validateCreative(creative, camp.network);
-    if (issues.length) return done(Astro, `${issues[0].group >= 0 ? `Ad group ${issues[0].group + 1} · ` : ''}${issues[0].field}: ${issues[0].message}`, undefined, 'error');
-    await db.update(schema.adCampaigns).set({ creative }).where(where);
-    return done(Astro, 'Ad copy saved — all headlines and descriptions fit.');
+    const found = validateCreative(creative, camp.network);
+    if (bad) creativeError = `Keyword “${bad.slice(0, 40)}” isn’t valid. Use plain text, "phrase" or [exact].`;
+    else if (groups.some((g) => !/^https:\/\/|^http:\/\/localhost/.test(g.finalUrl))) creativeError = 'Final URLs must start with https://';
+    else if (found.length) creativeError = `${found[0].group >= 0 ? `Ad group ${found[0].group + 1} · ` : ''}${found[0].field}: ${found[0].message}`;
+    if (creativeError) {
+      camp.creative = creative; // re-render with the operator's edits so nothing is lost
+      Astro.response.status = 422;
+    } else {
+      await db.update(schema.adCampaigns).set({ creative }).where(where);
+      return done(Astro, 'Ad copy saved — every headline and description fits Google’s limits.');
+    }
   }
   if (action === 'settings') {
     const name = str(f, 'name', 100);
@@ -60,7 +70,7 @@ if (f) {
     const managed = bool(f, 'managed');
     // Self-serve campaigns can't jump straight to "live" here: the operator launches by importing the CSV.
     await db.update(schema.adCampaigns).set({ name, dailyBudgetCents: budget, managed, status: managed && status === 'live' && !camp.managed ? 'pending_launch' : status }).where(where);
-    return done(Astro, managed && !camp.managed ? 'Sent to the Branch Avenue ads team — we’ll launch within one business day.' : 'Campaign settings saved.');
+    return managed && !camp.managed ? go(Astro, `/app/ads/${id}?done=managed`) : done(Astro, 'Campaign settings saved.');
   }
   if (action === 'spend') {
     const period = str(f, 'period', 10);
@@ -78,9 +88,9 @@ if (f) {
       impressions: sql`${schema.adCampaigns.impressions} + ${impressions}`, conversions: sql`${schema.adCampaigns.conversions} + ${conversions}`,
     }).where(where);
     const fee = camp.managed ? await onManagedAdSpend({ tenantId, campaignId: camp.id, periodKey: period, spendCents }) : null;
-    return done(Astro, `Recorded ${money(spendCents)} of spend${fee ? ` · management fee ${money(fee.amountCents)}` : ''}.`);
+    return go(Astro, `/app/ads/${id}?done=spend&spend=${spendCents}&fee=${fee?.amountCents ?? 0}#stats`);
   }
-  return done(Astro, 'Unknown action.', undefined, 'error');
+  if (action !== 'creative') return done(Astro, 'Unknown action.', undefined, 'error');
 }
 
 const [att] = await db.select({ n: sql<number>`count(*)::int`, rev: sql<number>`coalesce(sum(${schema.bookings.subtotalCents}),0)::int` }).from(schema.bookings)
@@ -91,12 +101,40 @@ const bookings = Math.max(camp.conversions, att.n);
 const issues = validateCreative(camp.creative, camp.network);
 const today = new Date().toISOString().slice(0, 10);
 const kwBadge = (k: string) => matchType(k).type;
+const doneKey = Astro.url.searchParams.get('done');
+const origin = await siteOrigin(t);
+const cityLinks = await db.select({ id: schema.pages.id, local: schema.pages.local }).from(schema.pages).where(and(eq(schema.pages.tenantId, tenantId), eq(schema.pages.kind, 'city')));
+const cityPageFor = (c: string) => cityLinks.find((p) => p.local?.city === c);
+const landingPaths = [...new Set(camp.creative.adGroups.map((g) => { try { return new URL(g.finalUrl).pathname.replace(/^\/sites\/[^/]+/, ''); } catch { return ''; } }).filter(Boolean))];
 ---
 <AppLayout title={camp.name} section="ads" subtitle={`${camp.network === 'google' ? 'Google Search' : 'Meta'} · ${camp.cities.join(', ')} · ${camp.status.replace('_', ' ')}`} wide>
-  <a slot="actions" href="/app/ads" class="btn-ghost">← Ads</a>
-  {camp.network === 'google' && <a slot="actions" href={`/api/app/ads/${camp.id}.csv`} class="btn-primary"><Icon name="arrow" size={16} />Google Ads Editor CSV</a>}
+  {camp.network === 'google' && <a slot="actions" href={`/api/app/ads/${camp.id}.csv`} class="btn-primary" download><Icon name="arrow" size={16} />Google Ads Editor CSV</a>}
+  <Enhance />
+  <Crumbs items={[{ label: 'Ads', href: '/app/ads' }, { label: camp.name }]} />
+  {doneKey === 'created' && (
+    <NextSteps title={`Built ${camp.creative.adGroups.length} ad group${camp.creative.adGroups.length === 1 ? '' : 's'} with ${camp.creative.adGroups.reduce((s, g) => s + g.headlines.length, 0)} headlines`} text={issues.length ? `${issues.length} thing${issues.length === 1 ? '' : 's'} to fix before launch — see below.` : 'Every headline and description fits Google’s limits. Review the copy below, then launch it your way.'} dismissHref={`/app/ads/${id}`}
+      actions={[
+        ...(camp.network === 'google' ? [{ href: `/api/app/ads/${camp.id}.csv`, label: 'Download CSV for Google Ads Editor', icon: 'arrow', primary: true, download: true }] : []),
+        camp.managed ? { href: '#settings', label: 'Managed — we’ll launch it', icon: 'check' } : { href: '#settings', label: `Have Branch Avenue manage it (${pct(plan.adsManagementBps)})`, icon: 'users', primary: camp.network !== 'google' },
+        { href: '#stats', label: 'Where cost per booking appears', icon: 'chart' },
+      ]} />
+  )}
+  {doneKey === 'managed' && (
+    <NextSteps title="Sent to the Branch Avenue ads team" text={`We’ll review the copy, set up conversion tracking and launch within one business day. You’ll see spend, bookings and cost per booking here weekly. Fee: ${pct(plan.adsManagementBps)} of spend.`} dismissHref={`/app/ads/${id}`}
+      actions={[{ href: '/app/ads', label: 'Back to campaigns', icon: 'target', primary: true }, { href: '/app/seo#generator', label: 'Strengthen the landing city pages', icon: 'map' }]} />
+  )}
+  {doneKey === 'spend' && (
+    <NextSteps celebrate={false} title={`Recorded ${money(Number(Astro.url.searchParams.get('spend') ?? 0))} of spend`} text={`${Number(Astro.url.searchParams.get('fee') ?? 0) ? `Management fee accrued: ${money(Number(Astro.url.searchParams.get('fee')))}. ` : ''}Cost per booking is now ${bookings ? money(Math.round(camp.spendCents / bookings)) : 'waiting for the first booking'}.`} dismissHref={`/app/ads/${id}`}
+      actions={[{ href: '/app/ads', label: 'Compare all campaigns', icon: 'chart', primary: true }, { href: '#creative', label: 'Tweak the ad copy', icon: 'sparkle' }]} />
+  )}
 
-  <div class="grid gap-3 grid-cols-2 lg:grid-cols-6 mb-6">
+  <div class="flex flex-wrap items-center gap-2 mb-4 text-xs">
+    <span class="font-semibold text-ink-2">Cities:</span>
+    {camp.cities.map((c) => { const p = cityPageFor(c); return p ? <a class="chip bg-white border border-line text-ink py-1 px-2.5 hover:border-brand hover:text-brand" href={`/app/seo/city/${p.id}`}><Icon name="map" size={12} />{c}</a> : <span class="chip bg-canvas text-ink-2 py-1 px-2.5">{c}</span>; })}
+    {landingPaths.length > 0 && <span class="font-semibold text-ink-2 ml-2">Landing pages:</span>}
+    {landingPaths.slice(0, 4).map((lp) => <a class="chip bg-white border border-line text-ink py-1 px-2.5 hover:border-brand hover:text-brand font-mono font-normal" href={origin + lp} target="_blank" rel="noopener">{lp}</a>)}
+  </div>
+  <div id="stats" class="grid gap-3 grid-cols-2 lg:grid-cols-6 mb-6 scroll-mt-24">
     <div class="kpi"><p class="kpi-label">Spend</p><p class="kpi-value">{money(camp.spendCents)}</p></div>
     <div class="kpi"><p class="kpi-label">Impressions</p><p class="kpi-value">{camp.impressions.toLocaleString()}</p></div>
     <div class="kpi"><p class="kpi-label">Clicks</p><p class="kpi-value">{camp.clicks.toLocaleString()}</p><p class="hint">CPC {camp.clicks ? money(Math.round(camp.spendCents / camp.clicks)) : '—'}</p></div>
@@ -108,7 +146,8 @@ const kwBadge = (k: string) => matchType(k).type;
   <div class="grid gap-6 xl:grid-cols-[1fr_360px]">
     <form method="post" class="space-y-4 min-w-0" id="creative">
       <input type="hidden" name="_action" value="creative" />
-      {issues.length > 0 && <div role="alert" class="rounded-xl bg-red-50 border border-red-200 text-red-800 text-sm px-4 py-3">{issues.length} issue{issues.length === 1 ? '' : 's'} to fix before launch — first: {issues[0].field}: {issues[0].message}</div>}
+      {creativeError && <div role="alert" class="rounded-xl bg-red-50 border border-red-200 text-red-800 text-sm px-4 py-3 font-medium">Not saved — {creativeError}. Your edits are kept below.</div>}
+      {!creativeError && issues.length > 0 && <div role="alert" class="rounded-xl bg-red-50 border border-red-200 text-red-800 text-sm px-4 py-3">{issues.length} issue{issues.length === 1 ? '' : 's'} to fix before launch — first: {issues[0].field}: {issues[0].message}</div>}
       {camp.network === 'meta' && (
         <section class="card p-4 space-y-3">
           <h2 class="font-bold">Primary text</h2>
@@ -165,11 +204,11 @@ const kwBadge = (k: string) => matchType(k).type;
           </div>
         </details>
       ))}
-      {canEdit && <div class="sticky bottom-3 flex justify-end"><button class="btn-primary shadow-lg">Save ad copy</button></div>}
+      {canEdit && <div class="sticky bottom-3 flex justify-end"><button class="btn-primary shadow-lg" data-busy="Checking & saving…">Save ad copy</button></div>}
     </form>
 
     <aside class="space-y-4">
-      <form method="post" class="card p-4 space-y-3">
+      <form method="post" id="settings" class="card p-4 space-y-3 scroll-mt-24">
         <h2 class="font-bold">Settings</h2>
         <input type="hidden" name="_action" value="settings" />
         <div><label class="label" for="name">Name</label><input class="input" id="name" name="name" value={camp.name} maxlength="100" required /></div>
@@ -181,7 +220,7 @@ const kwBadge = (k: string) => matchType(k).type;
           <input type="checkbox" name="managed" checked={camp.managed} class="mt-1 size-4 accent-[var(--color-brand)] shrink-0" />
           <span class="text-sm"><span class="font-semibold block">Managed by Branch Avenue</span><span class="text-xs text-ink-2">{pct(plan.adsManagementBps)} of spend on {plan.name}. Weekly optimization + reporting.</span></span>
         </label>
-        {canEdit && <button class="btn-primary w-full">Save settings</button>}
+        {canEdit && <button class="btn-primary w-full" data-busy="Saving…">Save settings</button>}
       </form>
 
       <div class="card p-4 text-sm space-y-1">
@@ -203,7 +242,7 @@ const kwBadge = (k: string) => matchType(k).type;
           <div><label class="label text-xs" for="clicks">Clicks</label><input class="input" type="number" min="0" id="clicks" name="clicks" value="0" /></div>
           <div class="col-span-2"><label class="label text-xs" for="conversions">Conversions (bookings)</label><input class="input" type="number" min="0" id="conversions" name="conversions" value="0" /></div>
         </div>
-        {canEdit && <button class="btn-ghost w-full">Record spend</button>}
+        {canEdit && <button class="btn-ghost w-full" data-busy="Recording…" data-confirm="Record this spend? Totals and any management fee update immediately.">Record spend</button>}
         {fees.length > 0 && <ul class="text-xs text-ink-2 border-t border-line pt-2 space-y-0.5">{fees.slice(-6).map((e) => <li class="flex justify-between"><span>{e.sourceRef?.split(':').pop()}</span><span class="tabular-nums">fee {money(e.amountCents)} · {e.status}</span></li>)}</ul>}
       </form>
     </aside>

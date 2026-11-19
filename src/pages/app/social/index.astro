@@ -3,6 +3,10 @@ import { and, asc, desc, eq, gte, inArray, lt, sql } from 'drizzle-orm';
 import { z } from 'zod';
 import AppLayout from '../../../layouts/AppLayout.astro';
 import Icon from '../../../components/Icon.astro';
+import NextSteps from '../../../components/growth/NextSteps.astro';
+import Guide from '../../../components/growth/Guide.astro';
+import Empty from '../../../components/growth/Empty.astro';
+import Enhance from '../../../components/growth/Enhance.astro';
 import { getDb, schema } from '../../../db/client';
 import { formData, str } from '../../../lib/forms';
 import { generateCaptions } from '../../../lib/ai';
@@ -10,7 +14,7 @@ import { siteOrigin } from '../../../lib/tenant';
 import { localDay, addDays, formatLocal } from '../../../lib/time';
 import { itemPath } from '../../../lib/growth/blockdefs';
 import { NETWORKS, ADAPTERS, connectedNetworks, publishPost, type Network } from '../../../lib/growth/social';
-import { ctx, done, fmtDateTime, parseLocalDateTime, toLocalInput } from '../../../lib/growth/app';
+import { ctx, done, go, invalid, fmtDateTime, parseLocalDateTime, toLocalInput } from '../../../lib/growth/app';
 
 const { t, tenantId, canEdit } = ctx(Astro);
 const db = await getDb();
@@ -34,6 +38,8 @@ let draft = { itemId: Astro.url.searchParams.get('item') ?? '', occasion: Astro.
 if (draft.itemId && !itemById.has(draft.itemId)) draft.itemId = '';
 if (draft.itemId) draft.imageUrl = itemById.get(draft.itemId)!.images[0] ?? '';
 
+const composeErrors: Record<string, string> = {};
+let scheduleValue = '';
 const f = await formData(Astro);
 if (f) {
   if (!canEdit) return done(Astro, 'Only owners and managers can post.', undefined, 'error');
@@ -47,17 +53,22 @@ if (f) {
     generated = await generateCaptions({ business: t.name, city: t.city, itemName: item?.name, itemTagline: item?.tagline || undefined, occasion, tone, link: linkFor(item?.path) });
     draft = { ...draft, itemId: item?.id ?? '', occasion, tone, caption: generated[0] ?? '', imageUrl: item?.images[0] ?? '' };
   } else if (action === 'save' || action === 'schedule') {
-    const r = Post.safeParse({ caption: str(f, 'caption', 2200), networks: [...new Set(f.getAll('networks').map(String))], imageUrl: str(f, 'imageUrl', 500), itemId: str(f, 'itemId', 40) });
-    if (!r.success) return done(Astro, r.error.issues[0].message, undefined, 'error');
-    const item = r.data.itemId ? itemById.get(r.data.itemId) : undefined;
+    draft = { ...draft, caption: str(f, 'caption', 2200), networks: [...new Set(f.getAll('networks').map(String))], imageUrl: str(f, 'imageUrl', 500), itemId: str(f, 'itemId', 40) };
+    scheduleValue = str(f, 'scheduledAt', 20) || scheduleValue;
+    const r = Post.safeParse({ caption: draft.caption, networks: draft.networks, imageUrl: draft.imageUrl, itemId: draft.itemId });
+    if (!r.success) { for (const i of r.error.issues) composeErrors[String(i.path[0] ?? 'caption')] ??= i.message; }
     let scheduledAt: Date | null = null;
-    if (action === 'schedule') {
-      scheduledAt = parseLocalDateTime(str(f, 'scheduledAt', 20), t.timezone);
-      if (!scheduledAt || scheduledAt.getTime() < Date.now() - 60_000) return done(Astro, 'Pick a time in the future to schedule.', undefined, 'error');
+    if (r.success && action === 'schedule') {
+      scheduledAt = parseLocalDateTime(scheduleValue, t.timezone);
+      if (!scheduledAt || scheduledAt.getTime() < Date.now() - 60_000) composeErrors.scheduledAt = 'Pick a time in the future.';
     }
-    if (r.data.networks.includes('instagram') && !r.data.imageUrl) return done(Astro, 'Instagram posts need an image.', undefined, 'error');
-    await db.insert(schema.socialPosts).values({ tenantId, caption: r.data.caption, networks: r.data.networks, imageUrl: r.data.imageUrl || null, itemId: item?.id ?? null, link: linkFor(item?.path), status: scheduledAt ? 'scheduled' : 'draft', scheduledAt });
-    return done(Astro, scheduledAt ? `Scheduled for ${fmtDateTime(scheduledAt, t.timezone)}.` : 'Saved as a draft.', '/app/social#queue');
+    if (r.success && r.data.networks.includes('instagram') && !r.data.imageUrl) composeErrors.imageUrl = 'Instagram posts need an image — pick one below.';
+    if (r.success && !Object.keys(composeErrors).length) {
+      const item = r.data.itemId ? itemById.get(r.data.itemId) : undefined;
+      const [row] = await db.insert(schema.socialPosts).values({ tenantId, caption: r.data.caption, networks: r.data.networks, imageUrl: r.data.imageUrl || null, itemId: item?.id ?? null, link: linkFor(item?.path), status: scheduledAt ? 'scheduled' : 'draft', scheduledAt }).returning({ id: schema.socialPosts.id });
+      return go(Astro, `/app/social?done=${scheduledAt ? 'scheduled' : 'draft'}&id=${row.id}`);
+    }
+    Astro.response.status = 422;
   } else {
     const id = str(f, 'id', 40);
     if (!z.uuid().safeParse(id).success) return done(Astro, 'Unknown post.', undefined, 'error');
@@ -66,7 +77,7 @@ if (f) {
     if (!post) return done(Astro, 'Unknown post.', undefined, 'error');
     if (action === 'posted') {
       await db.update(schema.socialPosts).set({ status: 'published', publishedAt: new Date(), result: { ...(post.result ?? {}), manual: true } }).where(where);
-      return done(Astro, 'Marked as posted. Nice!', '/app/social#queue');
+      return go(Astro, `/app/social?done=posted&id=${id}`);
     }
     if (action === 'publish') {
       const r = await publishPost(t, post);
@@ -122,13 +133,32 @@ const ideas = [
 ];
 const connected = connectedNetworks(t);
 const imageChoices = [...new Set(items.flatMap((i) => i.images.slice(0, 1)))].slice(0, 12);
-const defaultAt = toLocalInput(new Date(new Date(nextSat + 'T15:00:00Z').getTime() - 2 * 86_400_000), t.timezone);
+const defaultAt = scheduleValue || toLocalInput(new Date(new Date(nextSat + 'T15:00:00Z').getTime() - 2 * 86_400_000), t.timezone);
+const doneKey = Astro.url.searchParams.get('done');
+const doneId = Astro.url.searchParams.get('id') ?? '';
+const [donePost] = z.uuid().safeParse(doneId).success ? await db.select().from(schema.socialPosts).where(and(eq(schema.socialPosts.id, doneId), eq(schema.socialPosts.tenantId, tenantId))).limit(1) : [];
 const netLabel = (n: string) => NETWORKS.find((x) => x.key === n)?.label ?? n;
 ---
 <AppLayout title="Social Studio" section="social" subtitle="Write a week of posts in five minutes. Schedule to Facebook, Instagram and Google Business Profile." wide>
+  <a slot="actions" href="#calendar" class="btn-ghost"><Icon name="calendar" size={16} />Calendar</a>
+  <Enhance />
+  {donePost && doneKey === 'scheduled' && (
+    <NextSteps title={`Scheduled for ${fmtDateTime(donePost.scheduledAt, t.timezone)}`} text={donePost.networks.some((n) => connected.includes(n)) ? 'Connected networks publish automatically at that time.' : 'When it’s due it shows as “Due now” in your queue — copy the caption, post it, then tap “Mark as posted”.'} dismissHref="/app/social"
+      actions={[{ href: '/app/social#compose', label: 'Write the next post', icon: 'sparkle', primary: true }, { href: '#calendar', label: 'See the calendar', icon: 'calendar' }, ...(donePost.itemId && itemById.get(donePost.itemId) ? [{ href: `/app/inventory/${donePost.itemId}`, label: `Open ${itemById.get(donePost.itemId)!.name}`, icon: 'box' }] : [])]} />
+  )}
+  {donePost && doneKey === 'draft' && <NextSteps celebrate={false} title="Saved to drafts" text="Schedule it from the queue whenever you’re ready." dismissHref="/app/social" actions={[{ href: '#queue', label: 'Go to queue', icon: 'clock', primary: true }, { href: '/app/social#compose', label: 'Write another', icon: 'sparkle' }]} />}
+  {donePost && doneKey === 'posted' && <NextSteps title="Posted — nice work! 🎉" text={`${recent.length} post${recent.length === 1 ? '' : 's'} published recently. Consistency (2–3 posts a week) beats viral one-offs.`} dismissHref="/app/social" actions={[{ href: `/app/social${ideas[0].href}#compose`, label: `Next idea: ${ideas[0].title}`, icon: 'sparkle', primary: true }, { href: '#calendar', label: 'See the calendar', icon: 'calendar' }]} />}
+  <Guide why="Families check your Facebook, Instagram and Google profile before they book. Regular posts showing real units in real yards build trust — and Google Business Profile posts help you show up in the map pack.">
+    <li>Pick a rental and an occasion, then “Write captions” for three ready-to-edit options.</li>
+    <li>Post 2–3 times a week. Midweek posts about weekend availability convert best.</li>
+    <li>Use your own photos of set-ups when you can — real yards beat graphics.</li>
+    <li>Links carry UTM tags, so bookings from social show up in your reports.</li>
+    <li>Not connected? Posts become reminders: copy, post from your phone, tap “Mark as posted”.</li>
+    <li>Google Business Profile posts stay visible for weeks — use them for offers and new units.</li>
+  </Guide>
   <div class="grid gap-6 xl:grid-cols-[1fr_380px]">
     <div class="space-y-6 min-w-0">
-      <section class="card p-4 sm:p-6" aria-labelledby="compose-h">
+      <section id="compose" class="card p-4 sm:p-6 scroll-mt-24" aria-labelledby="compose-h">
         <h2 id="compose-h" class="font-bold text-lg">Compose</h2>
         <form method="post" class="mt-3 grid gap-3 sm:grid-cols-[1fr_1fr_120px_auto] items-end">
           <input type="hidden" name="_action" value="generate" />
@@ -136,7 +166,7 @@ const netLabel = (n: string) => NETWORKS.find((x) => x.key === n)?.label ?? n;
             <select class="input" id="g-item" name="itemId"><option value="">Any / general</option>{items.map((i) => <option value={i.id} selected={draft.itemId === i.id}>{i.name}</option>)}</select></div>
           <div><label class="label" for="g-occ">Occasion</label><input class="input" id="g-occ" name="occasion" list="occasions" value={draft.occasion} maxlength="60" /><datalist id="occasions">{OCCASIONS.map((o) => <option value={o} />)}</datalist></div>
           <div><label class="label" for="g-tone">Tone</label><select class="input" id="g-tone" name="tone">{['fun', 'helpful', 'urgent'].map((x) => <option value={x} selected={draft.tone === x}>{x}</option>)}</select></div>
-          <button class="btn-pop" disabled={!canEdit}><Icon name="sparkle" size={16} />Write captions</button>
+          <button class="btn-pop" disabled={!canEdit} data-busy="Writing…"><Icon name="sparkle" size={16} />Write captions</button>
         </form>
 
         {generated.length > 0 && (
@@ -157,7 +187,8 @@ const netLabel = (n: string) => NETWORKS.find((x) => x.key === n)?.label ?? n;
           <div class="space-y-3">
             <div>
               <label class="label" for="caption">Caption <span class="font-normal text-ink-2" data-count>({draft.caption.length}/2200)</span></label>
-              <textarea class="input" id="caption" name="caption" rows="6" maxlength="2200" required placeholder="Click “Write captions”, or write your own.">{draft.caption}</textarea>
+              <textarea class="input" id="caption" name="caption" rows="6" maxlength="2200" required placeholder="Click “Write captions”, or write your own." {...invalid(composeErrors, 'caption')}>{draft.caption}</textarea>
+              {composeErrors.caption && <p id="caption-err" class="g-err">{composeErrors.caption}</p>}
             </div>
             <fieldset><legend class="label">Networks</legend>
               <div class="flex flex-wrap gap-2">
@@ -168,17 +199,17 @@ const netLabel = (n: string) => NETWORKS.find((x) => x.key === n)?.label ?? n;
                   </label>
                 ))}
               </div>
-              <p class="hint">Green dot = auto-publish. Others are manual: we remind you, you copy the caption and tap “Mark as posted”.</p>
+              {composeErrors.networks ? <p class="g-err">{composeErrors.networks}</p> : <p class="hint">Green dot = auto-publish. Others are manual: we remind you, you copy the caption and tap “Mark as posted”.</p>}
             </fieldset>
             <div class="flex flex-wrap items-end gap-2 pt-2 border-t border-line">
               <button class="btn-ghost" name="_action" value="save" disabled={!canEdit}>Save draft</button>
-              <div><label class="label text-xs" for="scheduledAt">Post at ({t.timezone.split('/')[1]?.replace('_', ' ')} time)</label><input class="input w-auto" type="datetime-local" id="scheduledAt" name="scheduledAt" value={defaultAt} /></div>
-              <button class="btn-primary" name="_action" value="schedule" disabled={!canEdit}><Icon name="clock" size={16} />Schedule</button>
+              <div><label class="label text-xs" for="scheduledAt">Post at ({t.timezone.split('/')[1]?.replace('_', ' ')} time)</label><input class="input w-auto" type="datetime-local" id="scheduledAt" name="scheduledAt" value={defaultAt} {...invalid(composeErrors, 'scheduledAt')} />{composeErrors.scheduledAt && <p id="scheduledAt-err" class="g-err">{composeErrors.scheduledAt}</p>}</div>
+              <button class="btn-primary" name="_action" value="schedule" disabled={!canEdit} data-busy="Scheduling…"><Icon name="clock" size={16} />Schedule</button>
             </div>
           </div>
           <div>
             <label class="label" for="imageUrl">Image</label>
-            <input class="input text-xs" id="imageUrl" name="imageUrl" value={draft.imageUrl} maxlength="500" placeholder="/demo/… or https://" />
+            <input class="input text-xs" id="imageUrl" name="imageUrl" value={draft.imageUrl} maxlength="500" placeholder="/demo/… or https://" {...invalid(composeErrors, 'imageUrl')} />{composeErrors.imageUrl && <p id="imageUrl-err" class="g-err">{composeErrors.imageUrl}</p>}
             <div class="mt-2 grid grid-cols-4 gap-1.5" role="group" aria-label="Pick an item image">
               {imageChoices.map((src) => <button type="button" class="aspect-square rounded-lg border border-line overflow-hidden hover:ring-2 hover:ring-brand bg-canvas cursor-pointer" data-img={src} aria-label="Use this image"><img src={src} alt="" class="size-full object-cover" loading="lazy" /></button>)}
             </div>
@@ -192,7 +223,7 @@ const netLabel = (n: string) => NETWORKS.find((x) => x.key === n)?.label ?? n;
 
       <section id="queue" class="card overflow-hidden scroll-mt-24" aria-labelledby="queue-h">
         <h2 id="queue-h" class="font-bold px-4 py-3 border-b border-line">Queue <span class="text-ink-2 font-medium text-sm">({queue.length})</span></h2>
-        {queue.length === 0 ? <p class="p-6 text-sm text-ink-2">Nothing queued. Pick a content idea to get started →</p> : (
+        {queue.length === 0 ? <Empty icon="share" title="Your queue is empty" text="Pick a content idea on the right, write captions in one click, and schedule a week of posts in five minutes." cta={{ href: `/app/social${ideas[0].href}#compose`, label: `Start with: ${ideas[0].title}` }} /> : (
           <ul class="divide-y divide-line">
             {queue.map((p) => {
               const due = p.status === 'scheduled' && p.scheduledAt && p.scheduledAt.getTime() <= Date.now();
@@ -205,7 +236,7 @@ const netLabel = (n: string) => NETWORKS.find((x) => x.key === n)?.label ?? n;
                     <div class="flex flex-wrap items-center gap-1.5 text-xs">
                       <span class:list={['chip', p.status === 'failed' ? 'bg-red-50 text-red-800' : due ? 'bg-pop/15 text-[#9A3412]' : p.status === 'scheduled' ? 'bg-sky-100 text-sky-800' : 'bg-canvas text-ink-2']}>{p.status === 'failed' ? 'Failed' : due ? 'Due now' : p.status === 'scheduled' ? fmtDateTime(p.scheduledAt, t.timezone) : 'Draft'}</span>
                       {p.networks.map((n) => <span class="chip bg-canvas text-ink-2">{netLabel(n)}</span>)}
-                      {p.itemId && itemById.get(p.itemId) && <span class="text-ink-2">· {itemById.get(p.itemId)!.name}</span>}
+                      {p.itemId && itemById.get(p.itemId) && <a class="text-ink-2 hover:text-brand underline-offset-2 hover:underline" href={`/app/inventory/${p.itemId}`}>· {itemById.get(p.itemId)!.name}</a>}
                     </div>
                     <p class="text-sm mt-1.5 whitespace-pre-line break-words line-clamp-4" id={`cap-${p.id}`}>{p.caption}</p>
                     {errs.map(([n, r]) => <p class="text-xs text-danger mt-1">{netLabel(n)}: {r.error}</p>)}
@@ -219,7 +250,7 @@ const netLabel = (n: string) => NETWORKS.find((x) => x.key === n)?.label ?? n;
                       {p.status === 'scheduled'
                         ? <form method="post"><input type="hidden" name="id" value={p.id} /><input type="hidden" name="_action" value="unschedule" /><button class="btn-ghost min-h-9 px-3 text-xs">Unschedule</button></form>
                         : <form method="post" class="flex gap-1"><input type="hidden" name="id" value={p.id} /><input type="hidden" name="_action" value="schedule-existing" /><label class="sr-only" for={`at-${p.id}`}>Schedule time</label><input id={`at-${p.id}`} class="input min-h-9 w-auto text-xs" type="datetime-local" name="scheduledAt" value={defaultAt} /><button class="btn-ghost min-h-9 px-3 text-xs">Schedule</button></form>}
-                      <form method="post" onsubmit="return confirm('Delete this post?')"><input type="hidden" name="id" value={p.id} /><input type="hidden" name="_action" value="delete" /><button class="btn-danger min-h-9 px-3 text-xs" aria-label="Delete post">✕</button></form>
+                      <form method="post" data-confirm="Delete this post? This can’t be undone."><input type="hidden" name="id" value={p.id} /><input type="hidden" name="_action" value="delete" /><button class="btn-danger min-h-9 px-3 text-xs" aria-label="Delete post">✕</button></form>
                     </div>
                   )}
                 </li>
@@ -229,7 +260,7 @@ const netLabel = (n: string) => NETWORKS.find((x) => x.key === n)?.label ?? n;
         )}
       </section>
 
-      <section class="card p-4 sm:p-6" aria-labelledby="cal-h">
+      <section id="calendar" class="card p-4 sm:p-6 scroll-mt-24" aria-labelledby="cal-h">
         <h2 id="cal-h" class="font-bold text-lg mb-3">Calendar <span class="text-sm font-medium text-ink-2">next 4 weeks</span></h2>
         <div class="grid grid-cols-7 gap-1 text-center text-[11px] font-semibold uppercase tracking-wide text-ink-2 mb-1" aria-hidden="true">{['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'].map((d) => <span>{d}</span>)}</div>
         <ol class="grid grid-cols-7 gap-1">
@@ -252,7 +283,7 @@ const netLabel = (n: string) => NETWORKS.find((x) => x.key === n)?.label ?? n;
         <h2 id="ideas-h" class="font-bold">Content ideas</h2>
         <ul class="mt-3 space-y-2">
           {ideas.map((i) => (
-            <li><a href={`/app/social${i.href}`} class="flex gap-3 rounded-xl border border-line p-3 hover:border-brand hover:bg-brand-soft/30">
+            <li><a href={`/app/social${i.href}#compose`} class="flex gap-3 rounded-xl border border-line p-3 hover:border-brand hover:bg-brand-soft/30">
               <span class="grid place-items-center size-9 rounded-lg bg-brand-soft text-brand shrink-0"><Icon name={i.icon} size={18} /></span>
               <span class="min-w-0"><span class="block text-sm font-semibold">{i.title}</span><span class="block text-xs text-ink-2 mt-0.5">{i.text}</span></span>
             </a></li>

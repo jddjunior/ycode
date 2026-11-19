@@ -96,11 +96,11 @@ const ago = (d: Date) => { const h = Math.round((Date.now() - d.getTime()) / 3_6
   {leads.length === 0 ? (
     <div class="mt-3"><Empty icon="users" title="No leads yet" text="Quote requests and abandoned checkouts from your website land here automatically — add phone enquiries with “Add lead”." cta={{ href: '/app/marketing', label: 'Drive more enquiries' }} learn={{ href: '/app/website', label: 'Check your quote form' }} /></div>
   ) : (
-    <div class="flex gap-4 overflow-x-auto pb-4 mt-3 snap-x" role="list" aria-label="Pipeline">
+    <div class="flex gap-4 overflow-x-auto pb-4 mt-3 snap-x [contain:paint]" role="list" aria-label="Pipeline">
       {STAGES.map((stage) => {
         const col = shown.filter((l) => l.stage === stage);
         return (
-          <section role="listitem" class="snap-start shrink-0 w-[85vw] sm:w-72 xl:flex-1 xl:min-w-0 rounded-2xl bg-white/60 border border-line p-3" aria-labelledby={`st-${stage}`}>
+          <section role="listitem" class="snap-start shrink-0 w-[85vw] sm:w-64 xl:w-auto xl:flex-1 xl:min-w-[13.5rem] rounded-2xl bg-white/60 border border-line p-3" aria-labelledby={`st-${stage}`}>
             <header class="flex items-center gap-2 px-1 pb-2">
               <span class:list={['chip', STAGE_META[stage].cls]} id={`st-${stage}`}>{STAGE_META[stage].label}</span>
               <span class="text-xs text-ink-2 tabular-nums">{col.length}</span>
@@ -112,30 +112,28 @@ const ago = (d: Date) => { const h = Math.round((Date.now() - d.getTime()) / 3_6
                   return (
                     <li class="card p-3">
                       <div class="flex items-start gap-2">
-                        <div class="min-w-0 flex-1">
-                          <p class="font-semibold text-sm truncate">{l.name || l.email || 'Anonymous'}</p>
-                          <p class="text-xs text-ink-2 truncate">{SOURCES[l.source]} · {ago(l.createdAt)}</p>
-                        </div>
+                        <p class="font-semibold text-sm min-w-0 flex-1 truncate">{l.name || l.email || 'Anonymous'}</p>
                         {value > 0 && <span class="text-xs font-bold tabular-nums">{money(value)}</span>}
                       </div>
+                      <p class="text-xs text-ink-2">{SOURCES[l.source]} · {ago(l.createdAt)}</p>
                       <dl class="mt-2 text-xs text-ink-2 space-y-0.5">
-                        {l.eventDate && <div class:list={[l.eventDate < today && 'line-through']}><dt class="inline">Event: </dt><dd class="inline font-semibold text-ink">{shortDay(l.eventDate)}</dd></div>}
-                        {l.zip && <div><dt class="inline">ZIP: </dt><dd class="inline">{l.zip}</dd></div>}
-                        {l.cart.length > 0 && <div><dt class="sr-only">Cart</dt><dd>{l.cart.map((c) => itemMap.get(c.itemId)?.name ?? 'Item').join(', ')}</dd></div>}
-                        {l.message && <div><dt class="sr-only">Message</dt><dd class="line-clamp-3 italic">“{l.message}”</dd></div>}
+                        {l.eventDate && <div class:list={[l.eventDate < today && 'line-through']}><dt class="inline">Event: </dt><dd class="inline font-semibold text-ink">{shortDay(l.eventDate)}</dd>{l.zip && <span> · {l.zip}</span>}</div>}
+                        {!l.eventDate && l.zip && <div><dt class="inline">ZIP: </dt><dd class="inline">{l.zip}</dd></div>}
+                        {l.cart.length > 0 && <div><dt class="sr-only">Cart</dt><dd class="line-clamp-2">{l.cart.map((c) => itemMap.get(c.itemId)?.name ?? 'Item').join(', ')}</dd></div>}
+                        {l.message && !l.message.startsWith('Checkout started') && <div><dt class="sr-only">Message</dt><dd class="line-clamp-3 italic">“{l.message}”</dd></div>}
                         {l.followUpsSent > 0 && <div>{l.followUpsSent} auto follow-up{l.followUpsSent === 1 ? '' : 's'} sent{l.lastFollowUpAt ? ` · last ${dateOnly(l.lastFollowUpAt, tz)}` : ''}</div>}
                       </dl>
-                      <div class="flex flex-wrap gap-1.5 mt-3">
-                        {l.phone && <a href={`tel:${l.phone}`} class="btn-ghost !min-h-8 !px-2.5 text-xs" aria-label={`Call ${l.name}`}><Icon name="phone" size={13} />Call</a>}
-                        {l.email && <a href={`mailto:${l.email}`} class="btn-ghost !min-h-8 !px-2.5 text-xs" aria-label={`Email ${l.name}`}><Icon name="message" size={13} />Email</a>}
-                        {canManage && stage !== 'won' && <a href={convertUrl(l)} class="btn-primary !min-h-8 !px-2.5 text-xs">Convert to booking</a>}
+                      <div class="flex gap-1.5 mt-3">
+                        {l.phone && <a href={`tel:${l.phone}`} class="btn-ghost !min-h-9 !px-0 w-9 shrink-0" aria-label={`Call ${l.name}`} title="Call"><Icon name="phone" size={15} /></a>}
+                        {l.email && <a href={`mailto:${l.email}`} class="btn-ghost !min-h-9 !px-0 w-9 shrink-0" aria-label={`Email ${l.name}`} title="Email"><Icon name="message" size={15} /></a>}
+                        {canManage && stage !== 'won' && stage !== 'lost' && <a href={convertUrl(l)} class="btn-primary !min-h-9 !px-2 text-xs flex-1 whitespace-nowrap">Convert<Icon name="arrow" size={13} /></a>}
                       </div>
                       {canManage && (
-                        <form method="post" class="flex gap-1.5 mt-2">
+                        <form method="post" class="flex gap-1.5 mt-1.5">
                           <input type="hidden" name="_action" value="stage" /><input type="hidden" name="id" value={l.id} />
                           <label class="sr-only" for={`s-${l.id}`}>Stage</label>
-                          <select id={`s-${l.id}`} name="stage" class="input !min-h-8 text-xs py-0">{STAGES.map((s) => <option value={s} selected={s === l.stage}>{STAGE_META[s].label}</option>)}</select>
-                          <button class="btn-ghost !min-h-8 !px-2.5 text-xs">Move</button>
+                          <select id={`s-${l.id}`} name="stage" class="input !min-h-9 text-xs py-0 flex-1 min-w-0">{STAGES.map((s) => <option value={s} selected={s === l.stage}>{STAGE_META[s].label}</option>)}</select>
+                          <button class="btn-ghost !min-h-9 !px-2.5 text-xs">Move</button>
                         </form>
                       )}
                     </li>
