@@ -4,6 +4,13 @@ import { and, desc, eq, sql } from 'drizzle-orm';
 import AppLayout from '../../../layouts/AppLayout.astro';
 import Icon from '../../../components/Icon.astro';
 import ItemForm from './_ItemForm.astro';
+import Crumbs from '../../../components/ops/Crumbs.astro';
+import Help from '../../../components/ops/Help.astro';
+import NextSteps from '../../../components/ops/NextSteps.astro';
+import SubmitGuard from '../../../components/ops/SubmitGuard.astro';
+import StatusChip from '../../../components/ops/StatusChip.astro';
+import { siteOrigin } from '../../../lib/tenant';
+import { dateTime } from '../../../lib/ops/ctx';
 import { getDb, schema } from '../../../db/client';
 import { availability } from '../../../lib/booking';
 import { money } from '../../../lib/pricing';
@@ -29,6 +36,7 @@ const [cats, others] = await Promise.all([
 ]);
 const valid = new Set([...others.filter((o) => o.id !== id).map((o) => o.id), ...cats.map((c) => 'cat:' + c.id)]);
 let error = '';
+let errors: Record<string, string> = {};
 let formItem: Record<string, unknown> = item;
 
 const f = await formData(Astro);
@@ -38,15 +46,15 @@ if (f && canManage) {
     const v = readItemForm(f, valid);
     formItem = { ...item, ...v };
     const r = parse(ItemSchema, v);
-    if (!r.ok) error = Object.values(r.errors)[0];
-    else if (v.kind === 'package' && !v.bundle.length) error = 'Packages need at least one component item.';
+    if (!r.ok) { errors = r.errors; error = 'Please fix the highlighted fields — your changes are kept.'; }
+    else if (v.kind === 'package' && !v.bundle.length) { errors = { bundle: 'Set a quantity for at least one item' }; error = 'Packages need at least one component item.'; }
     else {
       try {
         await db.update(I).set({ ...v, updatedAt: new Date() }).where(and(eq(I.id, id), eq(I.tenantId, t.id)));
         flash(Astro.cookies, `${v.name} saved.`);
         return Astro.redirect(self, 303);
       } catch (e) {
-        error = String((e as Error).message).includes('items_slug_uq') ? 'Another item already uses that URL slug.' : 'Couldn’t save the item.';
+        if (String((e as Error).message).includes('items_slug_uq')) { errors = { slug: 'Another item already uses this URL — change the slug' }; error = 'That URL slug is taken.'; } else error = 'Couldn’t save the item — please try again.';
       }
     }
   } else if (action === 'log') {
@@ -94,6 +102,14 @@ for (let i = 0; i < 30; i++) {
 const bookedDays = heat.filter((h) => h.used > 0).length;
 const heatCls = (h: { free: number; used: number }) => capacity === 0 ? 'bg-gray-100 text-ink-2' : h.free === 0 ? 'bg-brand text-white' : h.used === 0 ? 'bg-white text-ink-2' : h.used / capacity >= 0.5 ? 'bg-[#9C88FA] text-white' : 'bg-brand-soft text-brand';
 const kindCls: Record<string, string> = { cleaning: 'bg-sky-100 text-sky-800', repair: 'bg-amber-100 text-amber-900', inspection: 'bg-green-100 text-green-800', retired: 'bg-red-100 text-red-800' };
+const upcomingBookings = await db.select({ id: schema.bookings.id, number: schema.bookings.number, startsAt: schema.bookings.startsAt, status: schema.bookings.status, qty: schema.bookingLines.qty, name: schema.customers.name })
+  .from(schema.bookingLines).innerJoin(schema.bookings, eq(schema.bookings.id, schema.bookingLines.bookingId)).leftJoin(schema.customers, eq(schema.customers.id, schema.bookings.customerId))
+  .where(and(eq(schema.bookingLines.tenantId, t.id), eq(schema.bookingLines.itemId, id), sql`${schema.bookings.status} in ('hold','quote','pending','confirmed')`, sql`${schema.bookings.endsAt} >= now()`))
+  .orderBy(schema.bookings.startsAt).limit(8);
+const catSlug = item.categoryId ? (await db.select({ slug: schema.categories.slug }).from(schema.categories).where(eq(schema.categories.id, item.categoryId)).limit(1))[0]?.slug : null;
+const siteUrl = await siteOrigin(t);
+const publicUrl = item.kind === 'package' ? `${siteUrl}/rentals/packages/${item.slug}` : catSlug ? `${siteUrl}/rentals/${catSlug}/${item.slug}` : null;
+const done = Astro.url.searchParams.get('done');
 const isDown = (l: typeof logs[number]) => (l.kind === 'retired' && l.outOfServiceUntil == null) || (l.kind === 'repair' && l.outOfServiceUntil && l.outOfServiceUntil > new Date());
 ---
 <AppLayout title={item.name} section="inventory" subtitle={`${item.kind === 'package' ? 'Package' : item.kind === 'addon' ? 'Add-on' : 'Rental'} · ${money(item.priceCents)} · ${item.kind === 'package' ? `${capacity} bookable` : `${item.quantity} unit${item.quantity === 1 ? '' : 's'}`}`} wide>
@@ -102,6 +118,22 @@ const isDown = (l: typeof logs[number]) => (l.kind === 'retired' && l.outOfServi
     <a href={`/app/bookings/new?items=${id}:1`} class="btn-ghost"><Icon name="plus" size={16} />Book this</a>
   </Fragment>
 
+  <Crumbs items={[{ label: 'Inventory', href: '/app/inventory' }, { label: item.kind === 'package' ? 'Packages' : item.kind === 'addon' ? 'Add-ons' : 'Rentals', href: `/app/inventory?kind=${item.kind}` }, { label: item.name }]} />
+  {done === 'created' && (
+    <NextSteps title={`${item.name} is in your inventory`} text={item.active ? 'It’s bookable on your website right now with live availability.' : 'It’s saved but hidden — tick “Active” when you’re ready to take bookings.'} celebrate dismiss={`/app/inventory/${id}`}
+      actions={[
+        { href: '#images', label: item.images.length ? 'Add more photos' : 'Add photos', icon: 'plus', primary: !item.images.length },
+        ...(item.kind !== 'package' ? [{ href: `/app/inventory/new?kind=package&with=${id}`, label: 'Add to a package', icon: 'gift' }] : []),
+        ...(publicUrl ? [{ href: publicUrl, label: 'Preview on site', icon: 'external', primary: !!item.images.length }] : []),
+      ]} />
+  )}
+  <Help benefit="See at a glance when this unit is earning, when it’s free to promote, and whether it has paid for itself.">
+    <ul>
+      <li>The 30-day strip uses the same availability engine as your website — including setup/teardown buffers and units out for repair.</li>
+      <li>Log a <strong>repair with a date</strong> to pull units out of availability until then; <strong>retire</strong> removes them for good. Cleaning and inspections are kept for your safety records.</li>
+      <li>Click any day to open that day’s deliveries.</li>
+    </ul>
+  </Help>
   <section class="card p-5 mb-6" aria-labelledby="heat-h">
     <div class="flex flex-wrap items-center gap-x-4 gap-y-1">
       <h2 id="heat-h" class="font-bold text-lg">Next 30 days</h2>
@@ -132,7 +164,20 @@ const isDown = (l: typeof logs[number]) => (l.kind === 'retired' && l.outOfServi
     </dl>
   </section>
 
-  <ItemForm item={formItem} categories={cats} others={others.filter((o) => o.id !== id)} surfaces={settings.surfaces ?? []} error={error} submitLabel="Save changes" />
+  <section class="card p-5 mb-6" aria-labelledby="up-h">
+    <div class="flex items-center gap-2"><h2 id="up-h" class="font-bold text-lg">Upcoming bookings</h2>{publicUrl && <a href={publicUrl} target="_blank" rel="noopener" class="ml-auto text-sm font-semibold text-brand inline-flex items-center gap-1"><Icon name="external" size={14} />View on website</a>}</div>
+    {upcomingBookings.length === 0 ? <p class="text-sm text-ink-2 mt-2">No upcoming bookings yet. <a href={`/app/bookings/new?items=${id}:1`} class="text-brand font-semibold">Book it by phone</a> or feature it on your homepage.</p> : (
+      <ul class="mt-3 divide-y divide-line">
+        {upcomingBookings.map((u) => (
+          <li><a href={`/app/bookings/${u.id}`} class="flex flex-wrap items-center gap-3 py-2.5 hover:text-brand">
+            <span class="font-bold text-brand">#{u.number}</span><span class="text-sm">{dateTime(u.startsAt, tz)}</span><span class="text-sm text-ink-2">{u.name}</span>{u.qty > 1 && <span class="text-xs text-ink-2">×{u.qty}</span>}<span class="ml-auto"><StatusChip status={u.status} /></span>
+          </a></li>
+        ))}
+      </ul>
+    )}
+  </section>
+
+  <ItemForm item={formItem} categories={cats} others={others.filter((o) => o.id !== id)} surfaces={settings.surfaces ?? []} error={error} errors={errors} submitLabel="Save changes" />
 
   <section id="maintenance" class="card p-5 mt-6 scroll-mt-20" aria-labelledby="mnt-h">
     <h2 id="mnt-h" class="font-bold text-lg">Maintenance log</h2>
@@ -150,7 +195,7 @@ const isDown = (l: typeof logs[number]) => (l.kind === 'retired' && l.outOfServi
             <div><label class="label" for="cost">Cost ($)</label><input id="cost" name="cost" class="input" inputmode="decimal" placeholder="0" /></div>
           </div>
           <div><label class="label" for="note">Note</label><textarea id="note" name="note" class="input" rows="2" placeholder="Patched seam on left turret"></textarea></div>
-          <button class="btn-primary w-full"><Icon name="wrench" size={16} />Add log entry</button>
+          <button class="btn-primary w-full" data-busy-label="Logging…"><Icon name="wrench" size={16} />Add log entry</button>
         </form>
       )}
       {logs.length === 0 ? <p class="text-sm text-ink-2">No entries yet. Log a cleaning after every rental to unlock “Clean machine”.</p> : (
@@ -171,9 +216,10 @@ const isDown = (l: typeof logs[number]) => (l.kind === 'retired' && l.outOfServi
   </section>
 
   {canManage && (
-    <form method="post" class="mt-6 flex justify-end" onsubmit="return confirm('Delete this item permanently?')">
+    <form method="post" class="mt-6 flex justify-end" data-confirm={`Delete ${item.name} permanently? Items with booking history can’t be deleted — hide them instead.`}>
       <input type="hidden" name="_action" value="delete" />
       <button class="btn-danger"><Icon name="x" size={16} />Delete item</button>
     </form>
   )}
+  <SubmitGuard />
 </AppLayout>

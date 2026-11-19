@@ -1,0 +1,76 @@
+---
+/** Settings → Blackout dates (closed days block online booking). */
+import { and, asc, eq, gte } from 'drizzle-orm';
+import Shell from './_Shell.astro';
+import Help from '../../../components/ops/Help.astro';
+import Err from '../../../components/ops/Err.astro';
+import Empty from '../../../components/ops/Empty.astro';
+import Icon from '../../../components/Icon.astro';
+import { getDb, schema } from '../../../db/client';
+import { formData, str, flash } from '../../../lib/forms';
+import { opsCtx, isUuid, isValidDay, shortDay, addDays } from '../../../lib/ops/ctx';
+import { eventsOnDay } from '../../../lib/booking';
+
+const { t, today, canManage } = opsCtx(Astro);
+const db = await getDb();
+const X = schema.blackouts;
+let error = '';
+let draft = { from: '', to: '', reason: '' };
+
+const f = await formData(Astro);
+if (f && canManage) {
+  const action = str(f, '_action', 20);
+  if (action === 'delete') {
+    const id = str(f, 'id', 40);
+    if (isUuid(id)) await db.delete(X).where(and(eq(X.id, id), eq(X.tenantId, t.id)));
+    flash(Astro.cookies, 'Date reopened for online booking.');
+    return Astro.redirect('/app/settings/blackouts', 303);
+  }
+  draft = { from: str(f, 'from', 10), to: str(f, 'to', 10), reason: str(f, 'reason', 120) };
+  const to = draft.to || draft.from;
+  if (!isValidDay(draft.from)) error = 'Pick a start date.';
+  else if (!isValidDay(to) || to < draft.from) error = 'End date must be on or after the start date.';
+  else {
+    const days: string[] = [];
+    for (let d = draft.from; d <= to && days.length < 90; d = addDays(d, 1)) days.push(d);
+    await db.insert(X).values(days.map((day) => ({ tenantId: t.id, day, reason: draft.reason }))).onConflictDoNothing();
+    flash(Astro.cookies, `${days.length} day${days.length === 1 ? '' : 's'} blacked out. Existing bookings on those days are untouched.`);
+    return Astro.redirect('/app/settings/blackouts', 303);
+  }
+}
+const rows = await db.select().from(X).where(and(eq(X.tenantId, t.id), gte(X.day, addDays(today, -30)))).orderBy(asc(X.day));
+const withEvents = await Promise.all(rows.map(async (r) => ({ ...r, events: await eventsOnDay(db, t, r.day) })));
+---
+<Shell title="Blackout dates" subtitle="Days you’re closed — vacations, holidays, maintenance." active="blackouts">
+  <Help benefit="Block days in one click so the website never takes a booking you can’t staff — no awkward refund calls.">
+    <ul>
+      <li>Blackouts only stop <strong>online</strong> bookings. You can still add a phone booking on a closed day.</li>
+      <li>Existing bookings aren’t canceled — the list below warns you if a closed day already has events.</li>
+      <li>Add a range (up to 90 days) for vacations.</li>
+    </ul>
+  </Help>
+  {canManage && (
+    <form method="post" class="card p-5 grid gap-3 sm:grid-cols-[160px_160px_1fr_auto] items-end">
+      <input type="hidden" name="_action" value="add" />
+      <div><label class="label" for="from">From</label><input id="from" name="from" type="date" class="input" min={today} value={draft.from} required aria-describedby={error ? 'bo-err' : undefined} /></div>
+      <div><label class="label" for="to">To <span class="font-normal text-ink-2">(optional)</span></label><input id="to" name="to" type="date" class="input" min={today} value={draft.to} /></div>
+      <div><label class="label" for="reason">Reason</label><input id="reason" name="reason" class="input" maxlength="120" placeholder="Family vacation" value={draft.reason} /></div>
+      <button class="btn-primary" data-busy-label="Adding…"><Icon name="plus" size={16} />Block dates</button>
+      <div class="sm:col-span-4"><Err id="bo-err" msg={error} /></div>
+    </form>
+  )}
+  <div class="mt-6">
+    {withEvents.length === 0 ? <Empty icon="calendar" title="No blackout dates" text="Every date is open for online booking. Add a day above when you need a break." /> : (
+      <ul class="card divide-y divide-line">
+        {withEvents.map((r) => (
+          <li class="flex flex-wrap items-center gap-3 px-5 py-3">
+            <span class="grid place-items-center size-10 rounded-xl bg-canvas text-center leading-none shrink-0"><span class="text-[10px] uppercase text-ink-2">{shortDay(r.day).split(',')[0]}</span><span class="font-bold">{Number(r.day.slice(8))}</span></span>
+            <div class="min-w-0 flex-1"><p class="font-semibold">{shortDay(r.day)}{r.day < today && <span class="text-ink-2 font-normal"> · past</span>}</p><p class="text-sm text-ink-2">{r.reason || 'Closed'}</p></div>
+            {r.events > 0 && <a href={`/app/deliveries?day=${r.day}`} class="chip bg-amber-100 text-amber-900">{r.events} booking{r.events === 1 ? '' : 's'} already on this day</a>}
+            {canManage && <form method="post" data-confirm="Reopen this date for online booking?"><input type="hidden" name="_action" value="delete" /><input type="hidden" name="id" value={r.id} /><button class="btn-ghost !min-h-9 text-xs">Reopen</button></form>}
+          </li>
+        ))}
+      </ul>
+    )}
+  </div>
+</Shell>

@@ -24,7 +24,7 @@ const Body = z.object({
   couponCode: z.string().trim().max(40).optional().nullable(),
   customer: z.object({
     name: z.string().trim().min(2, 'Enter your name').max(120),
-    email: z.string().trim().email('Enter a valid email').max(200),
+    email: z.email('Enter a valid email').max(200),
     phone: z.string().trim().refine((v) => v.replace(/\D/g, '').length >= 10, 'Enter a mobile number').pipe(z.string().max(40)),
     celebrantName: z.string().trim().max(80).optional().nullable(),
     celebrantBirthday: z.union([z.string().regex(/^\d{4}-\d{2}-\d{2}$/), z.literal('')]).optional().nullable(),
@@ -41,7 +41,7 @@ const Body = z.object({
   water: z.enum(['yes', 'no', 'na']).default('na'),
   notes: z.string().trim().max(1500).default(''),
   agreement: z.object({ name: z.string().trim().min(2, 'Type your full name to sign').max(120), accepted: z.literal(true, { message: 'Please accept the rental agreement' }) }),
-  leadId: z.string().uuid().optional().nullable(),
+  leadId: z.uuid().optional().nullable(),
   replaceToken: z.string().max(64).optional().nullable(),
 });
 

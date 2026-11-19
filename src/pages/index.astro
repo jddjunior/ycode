@@ -1,0 +1,238 @@
+---
+import PlatformLayout from '../layouts/PlatformLayout.astro';
+import Icon from '../components/Icon.astro';
+import { PLANS, planList, MARKETPLACE_FEE_BPS } from '../lib/plans';
+import { platformUrl } from '../lib/tenant';
+import { money } from '../lib/pricing';
+
+const pct = (b: number) => `${Number((b / 100).toFixed(2))}%`;
+const plans = planList();
+const faqs = [
+  { q: 'Do I own my website and domain?', a: 'Yes. Connect your own domain on day one, export your pages and content any time, and leave whenever you want. No hostage websites.' },
+  { q: 'Will I lose my Google rankings if I switch?', a: 'Not if the move is mapped properly. We import your old URLs, set up permanent 301 redirects to the matching new pages, keep your titles and structured data, and time the switch for your slow season. Assisted migration is free on every plan.' },
+  { q: 'Is pricing really not per item?', a: `Correct. Every plan includes unlimited inventory and you never pay more because you bought another bounce house. You pay a flat monthly price plus a small platform fee on online payments (${pct(PLANS.elite.platformFeeBps)}–${pct(PLANS.starter.platformFeeBps)}). You can pass that fee to customers if you prefer.` },
+  { q: 'What does the marketplace cost?', a: `Listing is free. A ${pct(MARKETPLACE_FEE_BPS)} fee applies only to bookings the BounceOS marketplace sends you. Bookings from your own website, ads, socials and repeat customers carry no marketplace fee.` },
+  { q: 'Do I need a separate marketing tool like HighLevel?', a: 'No. Email and SMS campaigns, birthday re-book automations, review requests, a social scheduler and a Google & Meta ad builder are built in.' },
+  { q: 'How long does setup take?', a: 'Most operators are live the same day: create your account, add your rentals (or let us import them), and your SEO website with city pages is published automatically.' },
+  { q: 'What happens in bad weather?', a: 'Every booking checks the forecast against your wind limit, flags risky days, and lets you reschedule or issue a credit in a couple of clicks.' },
+];
+const ld = [
+  {
+    '@context': 'https://schema.org', '@type': 'SoftwareApplication', name: 'BounceOS', applicationCategory: 'BusinessApplication', operatingSystem: 'Web, iOS, Android',
+    description: 'The all-in-one operating system for bounce house and party rental businesses: online booking, deliveries, SEO website, marketing, social, ads and a partner network.',
+    url: platformUrl() + '/', publisher: { '@type': 'Organization', name: 'Branch Avenue HQ' },
+    offers: plans.map((p) => ({ '@type': 'Offer', name: `BounceOS ${p.name}`, price: (p.monthlyCents / 100).toFixed(2), priceCurrency: 'USD', priceSpecification: { '@type': 'UnitPriceSpecification', price: (p.monthlyCents / 100).toFixed(2), priceCurrency: 'USD', unitCode: 'MON' } })),
+  },
+  { '@context': 'https://schema.org', '@type': 'FAQPage', mainEntity: faqs.map((f) => ({ '@type': 'Question', name: f.q, acceptedAnswer: { '@type': 'Answer', text: f.a } })) },
+];
+const pillars = [
+  { key: 'Run', color: 'bg-brand', blurb: 'The calm, organized weekend.', items: [
+    { icon: 'calendar', t: 'Live availability booking', d: 'Customers pick a date, see what’s really free, pay a deposit and e-sign — 24/7.' },
+    { icon: 'truck', t: 'Routes & crew app', d: 'Optimized delivery routes with setup times, plus a crew app with checklists for every stop.' },
+    { icon: 'cloud', t: 'Weather guard', d: 'Wind and rain forecasts on every booking, with one-click reschedule or credit.' },
+    { icon: 'box', t: 'Unlimited inventory', d: 'Units, add-ons and packages with cleaning buffers — never priced per item.' },
+  ] },
+  { key: 'Grow', color: 'bg-pop', blurb: 'Marketing that’s built in, not bolted on.', items: [
+    { icon: 'globe', t: 'SEO website you own', d: 'Fast storefront, product schema, and a page for every town you serve.' },
+    { icon: 'megaphone', t: 'Campaigns & reviews', d: 'Birthday re-books, review requests and promos by email and SMS.' },
+    { icon: 'share', t: 'Social studio', d: 'AI captions from your rentals, scheduled to Facebook, Instagram and Google.' },
+    { icon: 'target', t: 'Ads with cost per booking', d: 'Search campaigns per city, exported or managed — measured in bookings, not clicks.' },
+  ] },
+  { key: 'Earn', color: 'bg-mint', blurb: 'Get paid for being part of the network.', items: [
+    { icon: 'gift', t: 'Referral commissions', d: `${pct(PLANS.pro.referralCommissionBps)} of every operator you refer, for 12 months.` },
+    { icon: 'users', t: 'Overflow partners', d: 'Sold out Saturday? Send the lead to a partner and earn a share when they book.' },
+    { icon: 'map', t: 'Marketplace leads', d: 'Families searching your ZIP on BounceOS find you — fee only when they book.' },
+    { icon: 'dollar', t: 'A ledger you can audit', d: 'Every commission, share and payout status in one place — no mystery deductions.' },
+  ] },
+];
+---
+<PlatformLayout title="BounceOS — Bounce House Rental Software That Gets You Booked | Branch Avenue HQ" description="Booking, deliveries, an SEO website, email & SMS, social, Google Ads and a partner network for bounce house and party rental companies. Flat pricing, unlimited items, you own your site." ld={ld}>
+  <!-- Hero -->
+  <section class="relative overflow-hidden bg-ink text-white">
+    <div class="absolute inset-0 [background:radial-gradient(55%_70%_at_85%_0%,rgba(91,60,245,.75)_0%,transparent_65%),radial-gradient(35%_55%_at_0%_100%,rgba(255,90,31,.55)_0%,transparent_60%)]" aria-hidden="true"></div>
+    <div class="absolute inset-0 opacity-[.07] [background-image:radial-gradient(#fff_1px,transparent_1px)] [background-size:22px_22px]" aria-hidden="true"></div>
+    <div class="relative max-w-6xl mx-auto px-4 pt-14 pb-16 sm:pt-20 sm:pb-24 grid gap-12 lg:grid-cols-[1.05fr_.95fr] items-center">
+      <div>
+        <p class="inline-flex items-center gap-2 rounded-full bg-white/10 px-3 py-1 text-xs font-semibold text-white/90 ring-1 ring-white/15"><span class="size-1.5 rounded-full bg-sun"></span>By Branch Avenue HQ · built for party rental operators</p>
+        <h1 class="mt-5 text-[2.6rem] leading-[0.98] sm:text-7xl font-extrabold tracking-tight text-white">Get <span class="relative whitespace-nowrap text-sun">booked<svg class="absolute -bottom-2 left-0 w-full" viewBox="0 0 200 12" aria-hidden="true"><path d="M2 9C50 2 150 2 198 8" stroke="#FF5A1F" stroke-width="4" fill="none" stroke-linecap="round" /></svg></span>,<br />not just organized.</h1>
+        <p class="mt-6 text-lg sm:text-xl text-white/75 max-w-xl">BounceOS runs your bounce house business — bookings, deliveries, crew — and fills the calendar with a website, SEO, campaigns, social and ads that are already built in.</p>
+        <div class="mt-8 flex flex-wrap gap-3">
+          <a href="/signup" class="btn-pop min-h-13 px-6 text-base rounded-2xl">Start your free 30-day trial <Icon name="arrow" size={18} /></a>
+          <a href="/pricing" class="btn min-h-13 px-6 text-base rounded-2xl bg-white/10 text-white ring-1 ring-white/20 hover:bg-white/15">See pricing</a>
+        </div>
+        <ul class="mt-8 grid grid-cols-1 sm:grid-cols-3 gap-3 text-sm text-white/75">
+          <li class="flex items-center gap-2"><Icon name="check" size={16} class="text-sun shrink-0" />No per-item pricing</li>
+          <li class="flex items-center gap-2"><Icon name="check" size={16} class="text-sun shrink-0" />You own your site</li>
+          <li class="flex items-center gap-2"><Icon name="check" size={16} class="text-sun shrink-0" />Free assisted migration</li>
+        </ul>
+      </div>
+
+      <!-- Product vignette (pure HTML/CSS) -->
+      <div class="relative" aria-hidden="true">
+        <div class="absolute -inset-6 rounded-[2.5rem] bg-gradient-to-br from-brand/40 to-pop/30 blur-2xl"></div>
+        <div class="relative rounded-[1.75rem] bg-white text-ink p-5 shadow-2xl ring-1 ring-black/5 rotate-[1.2deg]">
+          <div class="flex items-center gap-2">
+            <span class="grid place-items-center size-8 rounded-lg bg-pop font-black text-[#1B1F4A]">B</span>
+            <p class="font-[family-name:var(--font-display)] font-extrabold">This weekend</p>
+            <span class="ml-auto chip bg-green-50 text-green-800">11 booked</span>
+          </div>
+          <div class="mt-4 grid grid-cols-3 gap-2">
+            {[['Sat', 7, 'bg-brand'], ['Sun', 4, 'bg-pop'], ['Mon', 0, 'bg-line']].map(([d, n, c]) => (
+              <div class="rounded-2xl bg-canvas p-3"><p class="text-xs text-ink-2 font-semibold">{d}</p><p class="text-2xl font-extrabold font-[family-name:var(--font-display)]">{n}</p><div class="mt-2 h-1.5 rounded-full bg-line"><div class={`h-full rounded-full ${c}`} style={`width:${Number(n) * 12}%`}></div></div></div>
+            ))}
+          </div>
+          <div class="mt-3 rounded-2xl border border-line p-3 flex items-center gap-3">
+            <span class="grid place-items-center size-9 rounded-xl bg-brand-soft text-brand"><Icon name="target" size={18} /></span>
+            <div class="min-w-0"><p class="text-xs text-ink-2">Google Ads · Katy</p><p class="font-bold">$14.20 <span class="text-xs font-semibold text-ink-2">cost per booking</span></p></div>
+            <span class="ml-auto chip bg-green-50 text-green-800">↓ 18%</span>
+          </div>
+          <div class="mt-3 rounded-2xl border border-line p-3 flex items-center gap-3">
+            <span class="grid place-items-center size-9 rounded-xl bg-sun/30 text-[#7A5200]"><Icon name="star" size={18} /></span>
+            <div class="min-w-0"><p class="text-xs text-ink-2">Review requests sent</p><p class="font-bold">9 today · same link for everyone</p></div>
+          </div>
+        </div>
+        <div class="absolute -left-4 -bottom-6 sm:-left-10 rounded-2xl bg-white text-ink px-4 py-3 shadow-xl ring-1 ring-black/5 -rotate-[3deg] flex items-center gap-2">
+          <span class="text-xl">🎉</span><p class="text-sm font-bold">Overflow lead sent → <span class="text-mint">+$32 share</span></p>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- The old stack -->
+  <section class="max-w-6xl mx-auto px-4 py-16 sm:py-20">
+    <div class="grid gap-10 lg:grid-cols-2 items-center">
+      <div>
+        <p class="text-sm font-bold text-pop uppercase tracking-wider">The problem</p>
+        <h2 class="mt-2 text-3xl sm:text-5xl font-extrabold leading-tight">Four tools, four bills, and still no idea which ad booked the party.</h2>
+        <p class="mt-4 text-ink-2 text-lg">Most rental operators stitch together booking software, a separate marketing system, an SEO agency and an answering service. Prices climb with every unit you buy, and the website you paid for can’t come with you when you leave.</p>
+      </div>
+      <div class="grid gap-3">
+        {[
+          { t: 'Booking software priced per item', d: 'Some incumbents charge more as inventory grows — e.g. +$25 per 50 items on top tiers.' },
+          { t: 'A separate marketing stack', d: 'Texts, email and review requests sold as a separate subscription ($97–$497/mo for HighLevel).' },
+          { t: 'SEO as an expensive add-on', d: 'Packages like $2,400 up front or $400/mo for six months, then more “to maintain rankings”.' },
+          { t: 'Websites you can’t take with you', d: '“If you decide to leave, you can’t take it with you” — a real reviewer on a big incumbent.' },
+        ].map((x) => (
+          <div class="flex gap-4 rounded-2xl border border-line bg-white p-4">
+            <span class="grid place-items-center size-9 rounded-xl bg-red-50 text-danger shrink-0"><Icon name="x" size={18} /></span>
+            <div><p class="font-bold">{x.t}</p><p class="text-sm text-ink-2">{x.d}</p></div>
+          </div>
+        ))}
+        <p class="text-xs text-ink-2">Figures from public vendor pages and reviews, as of 2026. <a class="text-brand font-semibold" href="/compare">See the full comparison →</a></p>
+      </div>
+    </div>
+  </section>
+
+  <!-- Run / Grow / Earn -->
+  <section id="features" class="bg-canvas border-y border-line scroll-mt-16">
+    <div class="max-w-6xl mx-auto px-4 py-16 sm:py-20">
+      <div class="max-w-2xl">
+        <p class="text-sm font-bold text-brand uppercase tracking-wider">One platform</p>
+        <h2 class="mt-2 text-3xl sm:text-5xl font-extrabold leading-tight">Run the business. Grow the bookings. Earn from the network.</h2>
+      </div>
+      <div class="mt-10 grid gap-5 lg:grid-cols-3">
+        {pillars.map((p) => (
+          <div class="card p-6 flex flex-col">
+            <div class="flex items-center gap-3"><span class={`grid place-items-center size-10 rounded-2xl ${p.color} text-white font-black font-[family-name:var(--font-display)]`}>{p.key[0]}</span><div><h3 class="text-2xl font-extrabold leading-none">{p.key}</h3><p class="text-sm text-ink-2 mt-1">{p.blurb}</p></div></div>
+            <ul class="mt-6 space-y-5">
+              {p.items.map((i) => (
+                <li class="flex gap-3"><span class="grid place-items-center size-9 rounded-xl bg-canvas text-ink shrink-0"><Icon name={i.icon} size={18} /></span><div><p class="font-bold">{i.t}</p><p class="text-sm text-ink-2">{i.d}</p></div></li>
+              ))}
+            </ul>
+          </div>
+        ))}
+      </div>
+    </div>
+  </section>
+
+  <!-- How it works -->
+  <section class="max-w-6xl mx-auto px-4 py-16 sm:py-20">
+    <h2 class="text-3xl sm:text-5xl font-extrabold text-center">Live this afternoon.</h2>
+    <p class="text-center text-ink-2 mt-3 text-lg">Not “30 business days”. Three steps.</p>
+    <ol class="mt-12 grid gap-6 md:grid-cols-3">
+      {[
+        { t: 'Tell us about your business', d: 'Pick a theme and the towns you serve. Your booking website and a page for every city publish instantly.', icon: 'sparkle' },
+        { t: 'Add your rentals', d: 'Photos, sizes, prices and setup needs — or send us your spreadsheet or old site and we’ll import it.', icon: 'box' },
+        { t: 'Turn on growth', d: 'Switch on review requests and birthday re-books, schedule a week of posts, and launch a Search campaign.', icon: 'bolt' },
+      ].map((s, i) => (
+        <li class="relative card p-6">
+          <span class="absolute -top-4 left-6 grid place-items-center size-9 rounded-full bg-ink text-white font-extrabold font-[family-name:var(--font-display)]">{i + 1}</span>
+          <Icon name={s.icon} size={28} class="text-brand mt-2" />
+          <h3 class="mt-3 text-xl font-extrabold">{s.t}</h3>
+          <p class="text-ink-2 mt-2">{s.d}</p>
+        </li>
+      ))}
+    </ol>
+  </section>
+
+  <!-- Migration -->
+  <section class="max-w-6xl mx-auto px-4 pb-16 sm:pb-20">
+    <div class="relative overflow-hidden rounded-[2rem] bg-brand text-white p-8 sm:p-12">
+      <div class="absolute -right-24 -top-24 size-80 rounded-full bg-white/10" aria-hidden="true"></div>
+      <div class="absolute right-20 -bottom-28 size-64 rounded-full bg-pop/40" aria-hidden="true"></div>
+      <div class="relative grid gap-8 lg:grid-cols-[1.2fr_1fr] items-center">
+        <div>
+          <p class="chip bg-white/15 text-white">Free on every plan</p>
+          <h2 class="mt-3 text-3xl sm:text-5xl font-extrabold leading-tight text-white">Switch without losing your rankings.</h2>
+          <p class="mt-4 text-white/80 text-lg">Fear of losing Google traffic keeps operators stuck on software they’ve outgrown. We map every old URL to its new home with permanent 301 redirects, keep your titles and structured data, and schedule the move for your off-season.</p>
+          <a href="/signup" class="mt-6 btn-pop min-h-12 px-6 rounded-2xl text-base">Plan my migration</a>
+        </div>
+        <ul class="space-y-3">
+          {['Import from InflatableOffice, Event Rental Systems, WordPress or a spreadsheet', 'URL-by-URL 301 redirect map from your old sitemap', 'Your domain, your content, full export any time', 'Before/after Search Console check-in at two weeks'].map((x) => (
+            <li class="flex gap-3 rounded-2xl bg-white/10 p-4 ring-1 ring-white/15"><Icon name="check" size={20} class="text-sun shrink-0" /><span>{x}</span></li>
+          ))}
+        </ul>
+      </div>
+    </div>
+  </section>
+
+  <!-- Pricing teaser -->
+  <section class="bg-canvas border-y border-line">
+    <div class="max-w-6xl mx-auto px-4 py-16 sm:py-20">
+      <div class="flex flex-wrap items-end gap-4">
+        <div><h2 class="text-3xl sm:text-5xl font-extrabold">Flat pricing. Unlimited rentals.</h2><p class="text-ink-2 mt-2 text-lg">Buy another bounce house — your bill doesn’t move.</p></div>
+        <a href="/pricing" class="ml-auto btn-ghost">Compare plans & fees</a>
+      </div>
+      <div class="mt-10 grid gap-5 md:grid-cols-3">
+        {plans.map((p) => (
+          <div class:list={['card p-6 relative', p.id === 'pro' && 'ring-2 ring-brand shadow-xl']}>
+            {p.id === 'pro' && <span class="absolute -top-3 left-6 chip bg-brand text-white">Most popular</span>}
+            <h3 class="text-xl font-extrabold">{p.name}</h3>
+            <p class="mt-2"><span class="text-4xl font-extrabold font-[family-name:var(--font-display)]">{money(p.monthlyCents).replace('.00', '')}</span><span class="text-ink-2">/mo</span></p>
+            <p class="text-sm text-ink-2 mt-1">+ {pct(p.platformFeeBps)} on online payments</p>
+            <ul class="mt-5 space-y-2 text-sm">{p.features.slice(0, 5).map((f) => <li class="flex gap-2"><Icon name="check" size={16} class="text-mint shrink-0 mt-0.5" />{f}</li>)}</ul>
+            <a href={`/signup?plan=${p.id}`} class:list={['mt-6 w-full', p.id === 'pro' ? 'btn-primary' : 'btn-ghost']}>Start with {p.name}</a>
+          </div>
+        ))}
+      </div>
+    </div>
+  </section>
+
+  <!-- FAQ -->
+  <section class="max-w-3xl mx-auto px-4 py-16 sm:py-20">
+    <h2 class="text-3xl sm:text-4xl font-extrabold text-center">Questions operators ask</h2>
+    <div class="mt-8 divide-y divide-line border-y border-line">
+      {faqs.map((f) => (
+        <details class="group py-4">
+          <summary class="flex items-center gap-3 cursor-pointer list-none font-bold text-lg">{f.q}<span class="ml-auto grid place-items-center size-8 rounded-full bg-canvas transition-transform group-open:rotate-45 shrink-0"><Icon name="plus" size={16} /></span></summary>
+          <p class="mt-3 text-ink-2">{f.a}</p>
+        </details>
+      ))}
+    </div>
+  </section>
+
+  <!-- CTA -->
+  <section class="max-w-6xl mx-auto px-4 pb-6">
+    <div class="rounded-[2rem] bg-ink text-white p-8 sm:p-14 text-center relative overflow-hidden">
+      <div class="absolute inset-0 [background:radial-gradient(50%_80%_at_50%_120%,rgba(255,90,31,.55),transparent_70%)]" aria-hidden="true"></div>
+      <div class="relative">
+        <h2 class="text-3xl sm:text-5xl font-extrabold text-white">Make this the summer you stop turning parties away.</h2>
+        <p class="mt-4 text-white/75 text-lg">30-day free trial. No card to start. Month to month.</p>
+        <div class="mt-8 flex flex-wrap justify-center gap-3">
+          <a href="/signup" class="btn-pop min-h-13 px-7 rounded-2xl text-base">Start free</a>
+          <a href="/find" class="btn min-h-13 px-7 rounded-2xl text-base bg-white/10 text-white ring-1 ring-white/20 hover:bg-white/15">Looking to rent? Find a company</a>
+        </div>
+      </div>
+    </div>
+  </section>
+</PlatformLayout>

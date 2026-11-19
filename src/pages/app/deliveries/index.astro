@@ -4,6 +4,9 @@ import { and, eq, inArray, isNull } from 'drizzle-orm';
 import AppLayout from '../../../layouts/AppLayout.astro';
 import Icon from '../../../components/Icon.astro';
 import WeatherBadge from '../../../components/ops/WeatherBadge.astro';
+import Help from '../../../components/ops/Help.astro';
+import Empty from '../../../components/ops/Empty.astro';
+import SubmitGuard from '../../../components/ops/SubmitGuard.astro';
 import { getDb, schema } from '../../../db/client';
 import { formData, str, flash } from '../../../lib/forms';
 import { opsCtx, pickDay, dayTitle, shortDay, addDays, time, isUuid, fullAddress, mapsLink } from '../../../lib/ops/ctx';
@@ -53,6 +56,13 @@ const hasCrew = team.some((m) => m.role === 'crew');
     {day !== today && <a href="?" class="btn-ghost">Today</a>}
   </Fragment>
 
+  <div class="no-print"><Help benefit="Plan the whole day in one screen: the fastest route that still makes every setup time, who drives what, and exactly what goes on each truck.">
+    <ul>
+      <li>Drop-offs are due at the event start <strong>minus the longest setup time</strong> on the booking; pickups start when the party ends.</li>
+      <li>Routes are planned as a morning drop-off run and an afternoon pickup run — deadlines first, then the shortest path — from your depot in Settings.</li>
+      <li>Assign a crew member and their phone shows the stops in this order with a checklist. Print the load list for the truck.</li>
+    </ul>
+  </Help></div>
   <section class="grid grid-cols-2 md:grid-cols-4 gap-3 no-print" aria-label="Day summary">
     <div class="kpi"><p class="kpi-label">Drop-offs</p><p class="kpi-value">{drops}</p></div>
     <div class="kpi"><p class="kpi-label">Pickups</p><p class="kpi-value">{picks}</p></div>
@@ -68,12 +78,7 @@ const hasCrew = team.some((m) => m.role === 'crew');
   )}
 
   {stops.length === 0 ? (
-    <div class="card p-10 text-center mt-6">
-      <span class="mx-auto grid place-items-center size-12 rounded-2xl bg-brand-soft text-brand"><Icon name="truck" /></span>
-      <h2 class="font-bold text-lg mt-3">No deliveries or pickups {day === today ? 'today' : 'this day'}</h2>
-      <p class="text-sm text-ink-2 mt-1">Use the arrows to check another day, or open the calendar.</p>
-      <a href="/app/bookings?view=calendar" class="btn-ghost mt-4"><Icon name="calendar" size={16} />Open calendar</a>
-    </div>
+    <div class="mt-6"><Empty icon="truck" title={`No deliveries or pickups ${day === today ? 'today' : 'this day'}`} text="A free day is a great day to clean units, log repairs, or text past customers about open weekend dates." cta={{ href: `/app/bookings/new?date=${day}`, label: 'Book this day' }} learn={{ href: '/app/bookings?view=calendar', label: 'Find a busy day' }} /></div>
   ) : (
     <div class="grid gap-6 xl:grid-cols-[minmax(0,1fr)_380px] mt-6">
       <section class="card overflow-hidden no-print" aria-labelledby="route-h">
@@ -177,6 +182,7 @@ const hasCrew = team.some((m) => m.role === 'crew');
       </aside>
     </div>
   )}
+  <SubmitGuard />
 </AppLayout>
 <style is:global>
   @media print {

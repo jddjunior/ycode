@@ -3,12 +3,15 @@ import { eq } from 'drizzle-orm';
 import { z } from 'zod';
 import AppLayout from '../../../layouts/AppLayout.astro';
 import Tabs from './_Tabs.astro';
+import NextSteps from '../../../components/growth/NextSteps.astro';
+import Guide from '../../../components/growth/Guide.astro';
+import Enhance from '../../../components/growth/Enhance.astro';
 import { getDb, schema } from '../../../db/client';
 import type { ThemeTokens } from '../../../db/schema';
 import { formData, str, parse } from '../../../lib/forms';
 import { THEMES, isHex, themeFor } from '../../../lib/themes';
 import { invalidateTenantCache, siteOrigin } from '../../../lib/tenant';
-import { ctx, done } from '../../../lib/growth/app';
+import { ctx, done, go } from '../../../lib/growth/app';
 
 const { t, tenantId, canEdit } = ctx(Astro);
 const db = await getDb();
@@ -60,7 +63,7 @@ if (f) {
     }
     await db.update(schema.sites).set({ theme: next, updatedAt: new Date() }).where(eq(schema.sites.tenantId, tenantId));
     invalidateTenantCache();
-    return done(Astro, useOverrides ? 'Theme and overrides saved.' : `Switched to ${base.label}.`);
+    return go(Astro, `/app/website/design?done=theme&label=${encodeURIComponent(useOverrides ? `${base.label} with your colours` : base.label)}`);
   }
   if (action === 'general') {
     const labels = f.getAll('navLabel').map(String), hrefs = f.getAll('navHref').map(String);
@@ -68,7 +71,7 @@ if (f) {
     const r = parse(General, { announcement: str(f, 'announcement', 400), footerBlurb: str(f, 'footerBlurb', 1000), titleTemplate: str(f, 'titleTemplate', 200), defaultDescription: str(f, 'defaultDescription', 400), ogImage: str(f, 'ogImage', 600), nav });
     if (!r.ok) return done(Astro, Object.entries(r.errors).map(([k, v]) => `${k}: ${v}`)[0], undefined, 'error');
     await db.update(schema.sites).set({ ...r.data, announcement: r.data.announcement || null, ogImage: r.data.ogImage || null, updatedAt: new Date() }).where(eq(schema.sites.tenantId, tenantId));
-    return done(Astro, 'Navigation and SEO defaults saved.');
+    return go(Astro, '/app/website/design?done=general');
   }
   return done(Astro, 'Unknown action.', undefined, 'error');
 }
@@ -77,11 +80,25 @@ const th = themeFor(site.theme);
 const origin = await siteOrigin(t);
 const navRows = [...site.nav, ...Array.from({ length: Math.max(0, 8 - site.nav.length) }, () => ({ label: '', href: '' }))].slice(0, 8);
 const fontLinks = Object.values(THEMES).map((x) => x.fontsHref);
+const doneKey = Astro.url.searchParams.get('done');
 ---
 <AppLayout title="Website" section="website" subtitle="Pick a look, tune your brand colours, and set the defaults every page inherits.">
   <a slot="actions" href={origin + '/'} target="_blank" rel="noopener" class="btn-ghost">View site</a>
   {fontLinks.map((h) => <link rel="stylesheet" href={h} />)}
+  <Enhance />
   <Tabs active="design" />
+  {doneKey === 'theme' && <NextSteps title={`Your site now uses ${(Astro.url.searchParams.get('label') ?? 'the new theme').slice(0, 60)}`} text="Every page, city page and product picked up the change instantly." dismissHref="/app/website/design"
+    actions={[{ href: origin + '/', label: 'See it live', icon: 'external', primary: true, external: true }, { href: '/app/website', label: 'Edit page content', icon: 'globe' }]} />}
+  {doneKey === 'general' && <NextSteps celebrate={false} title="Navigation & SEO defaults saved" text="Pages without their own meta description now use your default." dismissHref="/app/website/design"
+    actions={[{ href: origin + '/', label: 'Check the menu on your site', icon: 'external', primary: true, external: true }, { href: '/app/seo#pages', label: 'Review SEO scores', icon: 'search' }]} />}
+  <Guide why="A consistent, trustworthy look converts better — parents judge safety and professionalism in seconds. Themes are tuned for readability on phones in bright sun.">
+    <li>Pick the preset closest to your brand, then adjust only the primary and accent colours.</li>
+    <li>Keep text-on-background contrast at 4.5:1 or higher (the presets already do).</li>
+    <li>Keep the menu to 5–6 links: Rentals, Packages, Service Areas, FAQ, Contact.</li>
+    <li>The title template adds your business name to every page title — keep it short.</li>
+    <li>Use the announcement bar for one timely message (“Now booking spring dates”).</li>
+    <li>A 1200×630 share image makes links look great on Facebook and iMessage.</li>
+  </Guide>
 
   <form method="post" class="card p-4 sm:p-6 mb-6">
     <input type="hidden" name="_action" value="theme" />
@@ -135,7 +152,7 @@ const fontLinks = Object.values(THEMES).map((x) => x.fontsHref);
         <p class="hint">Keep strong contrast between text and background (4.5:1) so parents can read your site in the sun.</p>
       </div>
     </details>
-    {canEdit && <div class="mt-4 flex justify-end"><button class="btn-primary">Save theme</button></div>}
+    {canEdit && <div class="mt-4 flex justify-end"><button class="btn-primary" data-busy="Saving…">Save theme</button></div>}
   </form>
 
   <form method="post" class="card p-4 sm:p-6 grid gap-6 lg:grid-cols-2">
@@ -160,7 +177,7 @@ const fontLinks = Object.values(THEMES).map((x) => x.fontsHref);
       <div><label class="label" for="defaultDescription">Default meta description</label><textarea class="input" id="defaultDescription" name="defaultDescription" maxlength="170" rows="3">{site.defaultDescription}</textarea><p class="hint">{site.defaultDescription.length}/160 characters. Used when a page has none.</p></div>
       <div><label class="label" for="ogImage">Social share image</label><input class="input" id="ogImage" name="ogImage" value={site.ogImage ?? ''} maxlength="500" placeholder="https://…/share.jpg" /></div>
     </div>
-    {canEdit && <div class="lg:col-span-2 flex justify-end"><button class="btn-primary">Save navigation & defaults</button></div>}
+    {canEdit && <div class="lg:col-span-2 flex justify-end"><button class="btn-primary" data-busy="Saving…">Save navigation & defaults</button></div>}
   </form>
 
   <script>

@@ -66,3 +66,19 @@ export function zoneText(z: AvailResponse['zone'], zip: string) {
   if (z.feeCents === 0) return { tone: 'ok' as const, text: `Free delivery & setup to ${zip}` };
   return { tone: 'ok' as const, text: `${money(z.feeCents)} delivery & setup to ${zip}${z.minOrderCents ? ` · ${money(z.minOrderCents)} minimum` : ''}` };
 }
+
+export const addDays = (day: string, n: number) => {
+  const d = new Date(day + 'T12:00:00Z'); d.setUTCDate(d.getUTCDate() + n); return d.toISOString().slice(0, 10);
+};
+
+/** Nearby dates that are open (optionally: where every given item has a free unit). */
+export async function nearbyOpenDates(api: string, day: string, start: number, end: number, minDay: string, maxDay: string, itemIds: string[] = []) {
+  const cands = [1, -1, 2, -2, 7, -7, 14].map((n) => addDays(day, n)).filter((d) => d >= minDay && d <= maxDay);
+  const res = await Promise.all(cands.map((d) => fetchAvailability(api, d, start, end)));
+  const out: string[] = [];
+  res.forEach((r, i) => {
+    if ('error' in r || !r.ok) return;
+    if (itemIds.every((id) => (r.items.find((x) => x.id === id)?.free ?? 0) > 0)) out.push(cands[i]);
+  });
+  return out.sort().slice(0, 4);
+}

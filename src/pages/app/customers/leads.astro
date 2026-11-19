@@ -5,6 +5,9 @@ import { z } from 'zod';
 import AppLayout from '../../../layouts/AppLayout.astro';
 import Icon from '../../../components/Icon.astro';
 import Tabs from './_Tabs.astro';
+import Help from '../../../components/ops/Help.astro';
+import Empty from '../../../components/ops/Empty.astro';
+import SubmitGuard from '../../../components/ops/SubmitGuard.astro';
 import { getDb, schema } from '../../../db/client';
 import { money } from '../../../lib/pricing';
 import { formData, str, flash, parse } from '../../../lib/forms';
@@ -27,7 +30,7 @@ if (f && canManage) {
       flash(Astro.cookies, `Lead moved to ${STAGE_META[stage].label}.`);
     }
   } else if (action === 'add') {
-    const r = parse(z.object({ name: z.string().min(2, 'Name is required'), email: z.union([z.literal(''), z.string().email('Enter a valid email')]), phone: z.string().max(40) }), { name: str(f, 'name', 120), email: str(f, 'email', 200), phone: str(f, 'phone', 40) });
+    const r = parse(z.object({ name: z.string().min(2, 'Name is required'), email: z.union([z.literal(''), z.email('Enter a valid email')]), phone: z.string().max(40) }), { name: str(f, 'name', 120), email: str(f, 'email', 200), phone: str(f, 'phone', 40) });
     if (!r.ok) flash(Astro.cookies, Object.values(r.errors)[0], 'error');
     else {
       const ev = str(f, 'eventDate', 10);
@@ -76,6 +79,13 @@ const ago = (d: Date) => { const h = Math.round((Date.now() - d.getTime()) / 3_6
     )}
   </Fragment>
   <Tabs active="leads" leads={open} />
+  <Help benefit="Every unfinished checkout and quote request is money on the table — work them left to right and turn them into bookings in one click.">
+    <ul>
+      <li><strong>Abandoned checkouts</strong> already got an automatic reminder; a quick personal call closes many of the rest.</li>
+      <li><strong>Convert to booking</strong> opens the phone-booking builder with their date, ZIP and cart filled in — and marks the lead won when you save.</li>
+      <li>Move leads to <strong>Lost</strong> when they book elsewhere so your win rate stays honest.</li>
+    </ul>
+  </Help>
 
   <nav aria-label="Lead source" class="flex gap-1.5 overflow-x-auto pb-2">
     {[['', 'All sources'], ...Object.entries(SOURCES)].map(([k, l]) => (
@@ -84,11 +94,7 @@ const ago = (d: Date) => { const h = Math.round((Date.now() - d.getTime()) / 3_6
   </nav>
 
   {leads.length === 0 ? (
-    <div class="card p-10 text-center mt-3">
-      <span class="mx-auto grid place-items-center size-12 rounded-2xl bg-brand-soft text-brand"><Icon name="users" /></span>
-      <h2 class="font-bold text-lg mt-3">No leads yet</h2>
-      <p class="text-sm text-ink-2 mt-1">Quote requests and abandoned checkouts from your website land here automatically.</p>
-    </div>
+    <div class="mt-3"><Empty icon="users" title="No leads yet" text="Quote requests and abandoned checkouts from your website land here automatically — add phone enquiries with “Add lead”." cta={{ href: '/app/marketing', label: 'Drive more enquiries' }} learn={{ href: '/app/website', label: 'Check your quote form' }} /></div>
   ) : (
     <div class="flex gap-4 overflow-x-auto pb-4 mt-3 snap-x" role="list" aria-label="Pipeline">
       {STAGES.map((stage) => {
@@ -142,4 +148,5 @@ const ago = (d: Date) => { const h = Math.round((Date.now() - d.getTime()) / 3_6
       })}
     </div>
   )}
+  <SubmitGuard />
 </AppLayout>

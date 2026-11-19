@@ -1,0 +1,99 @@
+---
+import PlatformLayout from '../layouts/PlatformLayout.astro';
+import Icon from '../components/Icon.astro';
+import { PLANS, MARKETPLACE_FEE_BPS } from '../lib/plans';
+import { money } from '../lib/pricing';
+
+const pct = (b: number) => `${Number((b / 100).toFixed(2))}%`;
+/** Values transcribed from docs/research/01-competitor-software.md §3 (search-snippet evidence, as of 2026). */
+type V = 'y' | 'p' | 'n' | '?' | string;
+const cols = ['BounceOS', 'InflatableOffice', 'Event Rental Systems', 'Goodshuffle Pro', 'Booqable', 'Bounce Rental Solutions', 'Checkfront'];
+const rows: { f: string; v: V[]; note?: string }[] = [
+  { f: 'Entry price / month', v: [money(PLANS.starter.monthlyCents).replace('.00', ''), '$39–$85', '$79.95 + $99/yr hosting', '$39–$99', '$29–$35', '$70', '$99'] },
+  { f: 'Priced per item or per seat', v: ['No — unlimited', 'Per item (+$25 per 50 on top tier)', 'Per item', 'Per seat', 'By plan', 'By plan', 'Single plan'] },
+  { f: 'Platform take on online GMV', v: [`${pct(PLANS.elite.platformFeeBps)}–${pct(PLANS.starter.platformFeeBps)}`, 'None found', 'None found', '0.25%', '0%', '0.35%', '3%'] },
+  { f: 'Online booking / live availability', v: ['y', 'y', 'y', 'y', 'y', 'y', 'y'] },
+  { f: 'Inflatable-specific rules (setup buffers, surfaces, power)', v: ['y', 'y', 'y', 'p', 'p', 'y', 'n'] },
+  { f: 'Delivery zones & distance fees', v: ['y', '?', '?', '?', 'p', '?', 'n'] },
+  { f: 'Contracts / e-sign', v: ['y', 'y', 'y', 'y', 'p', 'y', 'p'] },
+  { f: 'Multi-stop route optimization', v: ['y', 'p', 'y', 'p', 'n', 'y', 'n'] },
+  { f: 'Crew / driver app', v: ['y', 'p', 'y', 'p', 'p', 'n', 'n'] },
+  { f: 'Hosted website you own (custom domain, export)', v: ['y', 'y', 'p', 'p', 'p', 'y', 'p'], note: 'ERS reviewer: “you don’t own the website”; Booqable checkout on booqable.com' },
+  { f: 'SEO tools & city pages', v: ['y', 'y', 'y', 'n', 'p', 'y', 'n'], note: 'IO’s paid SEO Power-Up is $2,400 or $400/mo × 6' },
+  { f: 'Email & SMS campaigns built in', v: ['y', 'y', 'p', 'p', 'p', 'y', 'p'], note: 'ERS marketing is a separate HighLevel subscription' },
+  { f: 'Google review requests (no gating)', v: ['y', '?', 'p', '?', '?', 'y', '?'] },
+  { f: 'Social post scheduler', v: ['y', '?', 'p', '?', '?', '?', '?'] },
+  { f: 'Google & Meta ad builder with cost per booking', v: ['y', '?', '?', '?', '?', '?', '?'], note: 'We found no competitor publicly offering booking-level ad attribution' },
+  { f: 'AI features (writing, chat or voice)', v: ['p', 'y', 'n', 'n', 'p', 'y', 'n'], note: 'BounceOS: AI copy for ads, captions and city pages; no AI phone agent yet' },
+  { f: 'Consumer marketplace', v: ['y', '?', '?', '?', '?', '?', '?'], note: `BounceOS fee ${pct(MARKETPLACE_FEE_BPS)} on marketplace bookings only` },
+  { f: 'Operator overflow / referral network', v: ['y', 'n', 'n', 'n', 'n', 'n', 'n'], note: 'No incumbent offers operator-to-operator overflow sharing' },
+  { f: 'Free assisted migration with 301 redirects', v: ['y', '?', '?', '?', '?', '?', '?'] },
+];
+const cell = (v: V) => v === 'y' ? { icon: 'check', cls: 'bg-green-100 text-green-700', sr: 'Yes' } : v === 'p' ? { icon: 'clock', cls: 'bg-sun/30 text-[#7A5200]', sr: 'Partial or paid add-on' } : v === 'n' ? { icon: 'x', cls: 'bg-red-50 text-red-700', sr: 'No' } : v === '?' ? { icon: '', cls: 'bg-canvas text-ink-2', sr: 'Not found' } : null;
+const pains = [
+  { q: '“pricing structure climbs quickly as your rental inventory grows”', s: 'review of an incumbent' },
+  { q: '“with Event Rental Systems, you don’t own the website… you can’t take it with you”', s: 'operator review' },
+  { q: '“when things go wrong on the weekend there is no real support”', s: 'competitor-cited review' },
+  { q: '“it seems it’s moving more and more to %fee option which is what we were avoiding”', s: 'Checkfront review' },
+];
+---
+<PlatformLayout title="BounceOS vs InflatableOffice, ERS, Goodshuffle, Booqable & more (2026) | BounceOS" description="An honest feature and pricing comparison of bounce house rental software: InflatableOffice, Event Rental Systems, Goodshuffle Pro, Booqable, Bounce Rental Solutions, Checkfront and BounceOS. As of 2026 public info.">
+  <section class="max-w-6xl mx-auto px-4 pt-14 pb-8">
+    <p class="chip bg-brand-soft text-brand">Comparison · as of 2026 public info</p>
+    <h1 class="mt-3 text-4xl sm:text-6xl font-extrabold leading-tight max-w-4xl">Rental software compared, honestly.</h1>
+    <p class="mt-4 text-lg text-ink-2 max-w-3xl">Most platforms do bookings well. The differences are in what you pay as you grow, whether you own your website, and whether marketing is built in or a second bill. Here’s what public pricing pages and reviews show.</p>
+  </section>
+
+  <section class="max-w-6xl mx-auto px-4">
+    <div class="flex flex-wrap gap-3 text-xs text-ink-2 mb-3" aria-label="Legend">
+      <span class="flex items-center gap-1.5"><span class="grid place-items-center size-5 rounded-full bg-green-100 text-green-700"><Icon name="check" size={12} /></span>Included</span>
+      <span class="flex items-center gap-1.5"><span class="grid place-items-center size-5 rounded-full bg-sun/30 text-[#7A5200]"><Icon name="clock" size={12} /></span>Partial / paid add-on</span>
+      <span class="flex items-center gap-1.5"><span class="grid place-items-center size-5 rounded-full bg-red-50 text-red-700"><Icon name="x" size={12} /></span>Not offered</span>
+      <span class="flex items-center gap-1.5"><span class="grid place-items-center size-5 rounded-full bg-canvas">?</span>Not found in public info</span>
+    </div>
+    <div class="card overflow-x-auto">
+      <table class="table min-w-[980px]">
+        <caption class="sr-only">Feature comparison of bounce house rental software</caption>
+        <thead><tr><th scope="col" class="sticky left-0 bg-canvas z-10 min-w-56">Feature</th>{cols.map((c, i) => <th scope="col" class:list={['text-center', i === 0 && '!bg-brand !text-white']}>{c}</th>)}</tr></thead>
+        <tbody>
+          {rows.map((r) => (
+            <tr>
+              <th scope="row" class="sticky left-0 bg-white z-10 text-left font-semibold text-sm text-ink normal-case tracking-normal px-4 py-3 border-b border-line">{r.f}{r.note && <span class="block text-xs font-normal text-ink-2 mt-0.5">{r.note}</span>}</th>
+              {r.v.map((v, i) => { const c = cell(v); return (
+                <td class:list={['text-center', i === 0 && 'bg-brand-soft/50']}>
+                  {c ? <span class:list={['inline-grid place-items-center size-7 rounded-full', c.cls]} title={c.sr}>{c.icon ? <Icon name={c.icon} size={14} /> : '?'}<span class="sr-only">{c.sr}</span></span> : <span class:list={['text-xs', i === 0 ? 'font-bold text-brand' : 'text-ink-2']}>{v}</span>}
+                </td>
+              ); })}
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
+    <p class="text-xs text-ink-2 mt-3">Sources: vendor pricing/feature pages and public reviews (Capterra, Software Advice, G2, app stores), collected November 2026 from search results. Prices change — confirm with each vendor. “?” means we couldn’t verify it either way, not that it’s missing. Trademarks belong to their owners; we’re not affiliated with them.</p>
+  </section>
+
+  <section class="max-w-6xl mx-auto px-4 py-16 grid gap-8 lg:grid-cols-2">
+    <div>
+      <h2 class="text-3xl font-extrabold">What operators complain about</h2>
+      <p class="text-ink-2 mt-2">Recurring themes in public reviews — and what BounceOS does about each.</p>
+      <ul class="mt-6 space-y-3">
+        {pains.map((p) => <li class="card p-4"><p class="font-semibold">{p.q}</p><p class="text-xs text-ink-2 mt-1">— {p.s}</p></li>)}
+      </ul>
+    </div>
+    <div class="space-y-3">
+      {[
+        { icon: 'dollar', t: 'Flat, published pricing', d: 'Unlimited items and no setup or hosting fees. The platform fee is small, shown up front, and can be passed to customers.' },
+        { icon: 'globe', t: 'You own the website', d: 'Your domain, your content, full export. Free migration with 301 redirects so rankings move with you.' },
+        { icon: 'megaphone', t: 'Marketing is built in', d: 'Campaigns, review requests, social scheduling and ads — no second subscription.' },
+        { icon: 'target', t: 'Ads measured in bookings', d: 'Every campaign shows cost per booking, because BounceOS sees the booking, not just the click.' },
+        { icon: 'users', t: 'A network that pays you', d: 'Overflow partners and the marketplace turn sold-out weekends into revenue instead of “sorry, we’re booked.”' },
+      ].map((x) => (
+        <div class="flex gap-4 rounded-2xl bg-white border border-line p-4">
+          <span class="grid place-items-center size-10 rounded-xl bg-brand text-white shrink-0"><Icon name={x.icon} size={18} /></span>
+          <div><p class="font-bold">{x.t}</p><p class="text-sm text-ink-2">{x.d}</p></div>
+        </div>
+      ))}
+      <div class="flex flex-wrap gap-3 pt-3"><a href="/signup" class="btn-pop">Start free trial</a><a href="/pricing" class="btn-ghost">See pricing</a></div>
+    </div>
+  </section>
+</PlatformLayout>

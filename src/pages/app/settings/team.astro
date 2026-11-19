@@ -1,0 +1,157 @@
+---
+/** Settings → Team & crew (owner only): invite with a one-time temporary password, change roles, remove. */
+import { and, eq, sql } from 'drizzle-orm';
+import { z } from 'zod';
+import Shell from './_Shell.astro';
+import OwnerOnly from './_OwnerOnly.astro';
+import Help from '../../../components/ops/Help.astro';
+import Err from '../../../components/ops/Err.astro';
+import Icon from '../../../components/Icon.astro';
+import { getDb, schema } from '../../../db/client';
+import { hashPassword } from '../../../lib/auth';
+import { token } from '../../../lib/util';
+import { PLANS } from '../../../lib/plans';
+import { formData, str, flash, parse } from '../../../lib/forms';
+import { opsCtx, isUuid, dateOnly } from '../../../lib/ops/ctx';
+import { logActivity } from '../../../lib/ops/stats';
+
+const { t, s, tz, isOwner } = opsCtx(Astro);
+const db = await getDb();
+const M = schema.memberships, U = schema.users;
+let errors: Record<string, string> = {};
+let draft = { name: '', email: '', role: 'crew' };
+let created: { name: string; email: string; password: string | null; role: string } | null = null;
+
+const members = async () => db.select({ id: U.id, name: U.name, email: U.email, role: M.role, since: M.createdAt }).from(M).innerJoin(U, eq(U.id, M.userId)).where(eq(M.tenantId, t.id)).orderBy(M.createdAt);
+const limit = PLANS[t.plan]?.limits.users ?? null;
+
+const f = isOwner ? await formData(Astro) : null;
+if (f) {
+  const action = str(f, '_action', 20);
+  const uid = str(f, 'userId', 40);
+  if (action === 'invite') {
+    draft = { name: str(f, 'name', 120), email: str(f, 'email', 200).toLowerCase(), role: str(f, 'role', 10) === 'manager' ? 'manager' : 'crew' };
+    const r = parse(z.object({ name: z.string().min(2, 'Enter their name'), email: z.email('Enter a valid email') }), draft);
+    const list = await members();
+    if (!r.ok) errors = r.errors;
+    else if (limit != null && list.length >= limit) errors = { email: `Your ${PLANS[t.plan].name} plan includes ${limit} users. Upgrade in Plan & billing to add more.` };
+    else if (list.some((m) => m.email.toLowerCase() === draft.email)) errors = { email: 'That person is already on your team.' };
+    else {
+      const [existing] = await db.select().from(U).where(sql`lower(${U.email}) = ${draft.email}`).limit(1);
+      let password: string | null = null;
+      let userId = existing?.id;
+      if (!existing) {
+        password = token(9);
+        [{ id: userId }] = await db.insert(U).values({ email: draft.email, name: draft.name, passwordHash: await hashPassword(password) }).returning({ id: U.id });
+      }
+      await db.insert(M).values({ tenantId: t.id, userId: userId!, role: draft.role as 'crew' | 'manager' }).onConflictDoNothing();
+      await logActivity(t.id, 'team', `${draft.name} joined the team as ${draft.role}`);
+      created = { name: draft.name, email: draft.email, password, role: draft.role };
+      draft = { name: '', email: '', role: 'crew' };
+      // Rendered directly (no redirect) so the temporary password is shown exactly once and never stored in a cookie.
+    }
+  } else if (action === 'role' && isUuid(uid) && uid !== s.user.id) {
+    const role = (['owner', 'manager', 'crew'] as const).find((x) => x === str(f, 'role', 10));
+    if (role) await db.update(M).set({ role }).where(and(eq(M.tenantId, t.id), eq(M.userId, uid)));
+    flash(Astro.cookies, 'Role updated.');
+    return Astro.redirect('/app/settings/team', 303);
+  } else if (action === 'remove' && isUuid(uid) && uid !== s.user.id) {
+    await db.delete(M).where(and(eq(M.tenantId, t.id), eq(M.userId, uid)));
+    await db.update(schema.bookings).set({ crewUserId: null }).where(and(eq(schema.bookings.tenantId, t.id), eq(schema.bookings.crewUserId, uid)));
+    flash(Astro.cookies, 'Removed from your team. Their assigned stops are now unassigned.');
+    return Astro.redirect('/app/settings/team', 303);
+  }
+}
+const team = isOwner ? await members() : [];
+const roleInfo: Record<string, string> = { owner: 'Everything, including billing, team and domains', manager: 'Bookings, inventory, customers, deliveries, reports & most settings', crew: 'Only the crew app: their route, checklists and cleaning logs' };
+const roleCls: Record<string, string> = { owner: 'bg-ink text-white', manager: 'bg-brand-soft text-brand', crew: 'bg-pop/15 text-[#B23A0B]' };
+const loginUrl = new URL('/login', Astro.url).toString();
+---
+<Shell title="Team & crew" subtitle="Give managers and crew their own logins." active="team">
+  {!isOwner ? <OwnerOnly what="your team" /> : (
+    <>
+      <Help benefit="Every crew member gets a phone-friendly route with tap-to-navigate and a safety checklist — and they only see what they need.">
+        <ul>
+          {Object.entries(roleInfo).map(([k, v]) => <li><strong class="capitalize">{k}</strong>: {v}.</li>)}
+          <li>New people get a <strong>temporary password shown once</strong>. Share it in person or by text; they can change it after signing in.</li>
+        </ul>
+      </Help>
+
+      {created && (
+        <section class="card p-5 mb-6 border-green-200 bg-gradient-to-br from-green-50 to-white" role="status" aria-labelledby="inv-h">
+          <div class="flex items-start gap-3">
+            <span class="grid place-items-center size-10 rounded-full bg-mint text-white shrink-0"><Icon name="check" size={20} /></span>
+            <div class="min-w-0 flex-1">
+              <h2 id="inv-h" class="font-bold text-lg">{created.name} is on the team as {created.role}</h2>
+              {created.password ? (
+                <>
+                  <p class="text-sm text-ink-2 mt-1">Share these sign-in details now — <strong class="text-ink">this password won’t be shown again.</strong></p>
+                  <dl class="mt-3 grid gap-2 sm:grid-cols-3 text-sm">
+                    <div class="rounded-xl bg-white border border-line p-3"><dt class="text-xs text-ink-2">Sign in at</dt><dd class="font-mono break-all">{loginUrl}</dd></div>
+                    <div class="rounded-xl bg-white border border-line p-3"><dt class="text-xs text-ink-2">Email</dt><dd class="font-mono break-all">{created.email}</dd></div>
+                    <div class="rounded-xl bg-white border-2 border-brand p-3"><dt class="text-xs text-ink-2">Temporary password</dt><dd class="font-mono text-lg font-bold tracking-wider select-all">{created.password}</dd></div>
+                  </dl>
+                </>
+              ) : <p class="text-sm text-ink-2 mt-1">They already have a BounceOS login, so they can sign in with their existing password.</p>}
+              <div class="flex flex-wrap gap-2 mt-4">
+                {created.role === 'crew' && <a href="/app/deliveries" class="btn-primary"><Icon name="truck" size={16} />Assign them today’s stops</a>}
+                <a href="/app/settings/team" class="btn-ghost">Done</a>
+              </div>
+            </div>
+          </div>
+        </section>
+      )}
+
+      <div class="grid gap-6 lg:grid-cols-[minmax(0,1fr)_340px]">
+        <section class="card overflow-hidden" aria-labelledby="mem-h">
+          <header class="px-5 py-4 border-b border-line flex items-center"><h2 id="mem-h" class="font-bold text-lg">Members</h2><span class="ml-auto text-xs text-ink-2 tabular-nums">{team.length}{limit != null ? ` of ${limit}` : ''} seats</span></header>
+          <ul class="divide-y divide-line">
+            {team.map((m) => (
+              <li class="px-5 py-4 flex flex-wrap items-center gap-3">
+                <span class="grid place-items-center size-10 rounded-full bg-canvas font-bold text-sm shrink-0" aria-hidden="true">{(m.name || m.email).slice(0, 1).toUpperCase()}</span>
+                <div class="min-w-0 flex-1">
+                  <p class="font-semibold truncate">{m.name || m.email}{m.id === s.user.id && <span class="text-ink-2 font-normal"> (you)</span>}</p>
+                  <p class="text-xs text-ink-2 truncate">{m.email} · since {dateOnly(m.since, tz)}</p>
+                </div>
+                {m.id === s.user.id ? <span class:list={['chip capitalize', roleCls[m.role]]}>{m.role}</span> : (
+                  <div class="flex items-center gap-2">
+                    <form method="post" class="flex gap-1.5">
+                      <input type="hidden" name="_action" value="role" /><input type="hidden" name="userId" value={m.id} />
+                      <label class="sr-only" for={`r-${m.id}`}>Role for {m.name}</label>
+                      <select id={`r-${m.id}`} name="role" class="input !min-h-9 text-xs w-28">{['manager', 'crew', 'owner'].map((r) => <option value={r} selected={r === m.role}>{r[0].toUpperCase() + r.slice(1)}</option>)}</select>
+                      <button class="btn-ghost !min-h-9 text-xs">Update</button>
+                    </form>
+                    <form method="post" data-confirm={`Remove ${m.name || m.email} from ${t.name}? They’ll lose access immediately.`}>
+                      <input type="hidden" name="_action" value="remove" /><input type="hidden" name="userId" value={m.id} />
+                      <button class="btn-danger !min-h-9 !px-2.5 text-xs" aria-label={`Remove ${m.name}`}><Icon name="x" size={14} /></button>
+                    </form>
+                  </div>
+                )}
+              </li>
+            ))}
+          </ul>
+          {!team.some((m) => m.role === 'crew') && <p class="px-5 py-3 text-xs bg-canvas/60 border-t border-line text-ink-2">No crew yet — add your first driver to unlock the <strong class="text-ink">Crew up</strong> achievement.</p>}
+        </section>
+
+        <form method="post" class="card p-5 space-y-3 self-start" novalidate aria-labelledby="add-h">
+          <input type="hidden" name="_action" value="invite" />
+          <h2 id="add-h" class="font-bold text-lg">Add a team member</h2>
+          <div><label class="label" for="name">Name</label><input id="name" name="name" class="input" value={draft.name} autocomplete="off" aria-invalid={errors.name ? 'true' : undefined} aria-describedby={errors.name ? 'name-err' : undefined} /><Err id="name-err" msg={errors.name} /></div>
+          <div><label class="label" for="email">Email</label><input id="email" name="email" type="email" class="input" value={draft.email} autocomplete="off" aria-invalid={errors.email ? 'true' : undefined} aria-describedby={errors.email ? 'email-err' : undefined} /><Err id="email-err" msg={errors.email} /></div>
+          <fieldset>
+            <legend class="label">Role</legend>
+            <div class="space-y-2">
+              {['crew', 'manager'].map((r) => (
+                <label class="flex items-start gap-3 rounded-xl border border-line p-3 cursor-pointer has-[:checked]:border-brand has-[:checked]:bg-brand-soft/50">
+                  <input type="radio" name="role" value={r} checked={draft.role === r} class="mt-1 accent-brand" />
+                  <span><span class="block text-sm font-semibold capitalize">{r}</span><span class="block text-xs text-ink-2">{roleInfo[r]}</span></span>
+                </label>
+              ))}
+            </div>
+          </fieldset>
+          <button class="btn-primary w-full" data-busy-label="Creating login…"><Icon name="plus" size={16} />Create login</button>
+        </form>
+      </div>
+    </>
+  )}
+</Shell>

@@ -1,0 +1,47 @@
+---
+import { inArray } from 'drizzle-orm';
+import Shell from './_Shell.astro';
+import { getDb, schema } from '../../db/client';
+import { money } from '../../lib/pricing';
+import { formatLocal } from '../../lib/time';
+import { marketplaceStats } from '../../lib/growth/hq';
+
+const mk = await marketplaceStats(90);
+const db = await getDb();
+const ids = [...new Set(mk.recentLeads.flatMap((l) => [...l.routedTenantIds, ...(l.wonByTenantId ? [l.wonByTenantId] : [])]))];
+const names = new Map((ids.length ? await db.select({ id: schema.tenants.id, name: schema.tenants.name }).from(schema.tenants).where(inArray(schema.tenants.id, ids)) : []).map((t) => [t.id, t.name]));
+---
+<Shell title="Marketplace" active="marketplace" subtitle="Consumer quote requests from /find, routed to up to 3 listed operators each.">
+  <div class="grid gap-3 grid-cols-2 lg:grid-cols-6 mb-6">
+    <div class="kpi"><p class="kpi-label">Requests</p><p class="kpi-value">{mk.total}</p><p class="hint">{mk.recent} in 90 days</p></div>
+    <div class="kpi"><p class="kpi-label">Routed</p><p class="kpi-value">{mk.routed}</p><p class="hint">{mk.routes} operator leads</p></div>
+    <div class="kpi"><p class="kpi-label">Unrouted</p><p class="kpi-value text-warn">{mk.unrouted}</p><p class="hint">no operator in ZIP</p></div>
+    <div class="kpi"><p class="kpi-label">Won</p><p class="kpi-value text-mint">{mk.won}</p></div>
+    <div class="kpi"><p class="kpi-label">Marketplace bookings</p><p class="kpi-value">{mk.bookings}</p></div>
+    <div class="kpi"><p class="kpi-label">Marketplace GMV</p><p class="kpi-value">{money(mk.gmv)}</p></div>
+  </div>
+  <div class="grid gap-6 lg:grid-cols-[320px_1fr]">
+    <section class="card overflow-hidden h-fit" aria-labelledby="z-h">
+      <h2 id="z-h" class="font-bold px-4 py-3 border-b border-line">Demand by ZIP</h2>
+      <ul class="divide-y divide-line text-sm">
+        {mk.zips.map((z) => <li class="px-4 py-2 flex items-center gap-2"><a class="font-mono font-semibold hover:text-brand" href={`/find/${z.zip}`}>{z.zip}</a><span class="ml-auto tabular-nums">{z.n}</span>{z.unrouted > 0 && <span class="chip bg-sun/30 text-[#7A5200]">{z.unrouted} unserved</span>}</li>)}
+        {mk.zips.length === 0 && <li class="px-4 py-3 text-ink-2">No requests yet.</li>}
+      </ul>
+    </section>
+    <section class="card overflow-hidden" aria-labelledby="l-h">
+      <h2 id="l-h" class="font-bold px-4 py-3 border-b border-line">Recent requests</h2>
+      <ul class="divide-y divide-line">
+        {mk.recentLeads.map((l) => (
+          <li class="px-4 py-3 text-sm flex flex-wrap gap-x-4 gap-y-1">
+            <span class="font-semibold">{l.name}</span>
+            <span class="text-ink-2">{l.zip} · event {l.eventDate}{l.guests ? ` · ${l.guests} guests` : ''}</span>
+            <span class="text-ink-2">{formatLocal(l.createdAt, 'UTC', { month: 'short', day: 'numeric' })}</span>
+            <span class="basis-full text-xs">{l.routedTenantIds.length ? <>Routed to {l.routedTenantIds.map((id) => names.get(id) ?? '?').join(', ')}</> : <span class="text-warn">Not routed — no operator serves this ZIP</span>}{l.wonByTenantId && <span class="text-mint font-semibold"> · won by {names.get(l.wonByTenantId)}</span>}</span>
+            {l.wants.length > 0 && <span class="basis-full flex flex-wrap gap-1">{l.wants.map((w) => <span class="chip bg-canvas text-ink-2">{w}</span>)}</span>}
+          </li>
+        ))}
+        {mk.recentLeads.length === 0 && <li class="px-4 py-6 text-sm text-ink-2">No marketplace requests yet. They appear here when families submit the quote form on /find.</li>}
+      </ul>
+    </section>
+  </div>
+</Shell>

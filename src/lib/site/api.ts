@@ -61,7 +61,7 @@ export const zZip = z.string().trim().regex(/^\d{5}$/, 'Enter a 5-digit ZIP');
 export const zHour = z.coerce.number().int().min(0).max(24);
 export const zWindow = z.object({ day: zDay, startHour: zHour, endHour: zHour, overnight: z.boolean().optional() })
   .refine((w) => w.overnight || w.endHour > w.startHour, { message: 'End time must be after start time', path: ['endHour'] });
-export const zLines = z.array(z.object({ itemId: z.string().uuid(), qty: z.coerce.number().int().min(1).max(20) })).max(30);
+export const zLines = z.array(z.object({ itemId: z.uuid(), qty: z.coerce.number().int().min(1).max(20) })).max(30);
 
 /** Keep only lines for this tenant's active items, merging duplicates. */
 export function cleanLines(lines: { itemId: string; qty: number }[], activeIds: Set<string>) {

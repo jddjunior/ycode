@@ -25,7 +25,10 @@ interface Props {
   conversion?: { valueCents: number; id: string } | null;
 }
 const { ctx, title, description, image, ld = [], noindex = false, rawTitle = false, conversion = null } = Astro.props;
-const { tenant: t, site, theme, base, href, origin, apiOrigin } = ctx;
+const { tenant: t, site, base, href, origin, apiOrigin } = ctx;
+// Platform preview can try other presets: /sites/{slug}/?theme=splash
+const tryTheme = ctx.preview ? Astro.url.searchParams.get('theme') : null;
+const theme = tryTheme && THEMES[tryTheme] ? (({ label: _l, mood: _m, fontsHref: _f, ...tok }) => tok)(THEMES[tryTheme]) : ctx.theme;
 const preset = THEMES[theme.preset] ? theme.preset : 'carnival';
 const fontsHref = THEMES[preset].fontsHref;
 

@@ -3,7 +3,7 @@ import { guard, csvResponse } from './_shared';
 import { salesTax, toCsv, dollars } from '../../../../lib/ops/reports';
 
 export const GET: APIRoute = async (ctx) => {
-  const g = guard(ctx); if ('error' in g) return g.error;
+  const g = guard(ctx); if (g instanceof Response) return g;
   const q = ctx.url.searchParams;
   const year = Math.min(2100, Math.max(2000, Number(q.get('year')) || Number(g.today.slice(0, 4))));
   const period = q.get('period') === 'quarter' ? 'quarter' : 'month';

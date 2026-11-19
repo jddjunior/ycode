@@ -7,9 +7,12 @@ import { and, desc, eq } from 'drizzle-orm';
 import { z } from 'zod';
 import AppLayout from '../../../layouts/AppLayout.astro';
 import BookingBuilder, { type BuilderProps } from '../../../islands/ops/BookingBuilder';
+import Crumbs from '../../../components/ops/Crumbs.astro';
+import Help from '../../../components/ops/Help.astro';
+import SubmitGuard from '../../../components/ops/SubmitGuard.astro';
 import { getDb, schema } from '../../../db/client';
 import { createBooking, BookingError } from '../../../lib/booking';
-import { formData, str, int, bool, flash, parse } from '../../../lib/forms';
+import { formData, str, int, bool, parse } from '../../../lib/forms';
 import { opsCtx, isUuid, isValidDay, addDays } from '../../../lib/ops/ctx';
 import { logActivity } from '../../../lib/ops/stats';
 import { money } from '../../../lib/pricing';
@@ -31,6 +34,7 @@ const itemIds = new Set(items.map((i) => i.id));
 const parseLines = (v: string) => v.split(',').map((x) => { const [id, n] = x.split(':'); return { itemId: id, qty: Math.max(1, Math.min(20, Number(n) || 1)) }; }).filter((l) => itemIds.has(l.itemId));
 
 let error = '';
+let errors: Record<string, string> = {};
 let prefill: BuilderProps['prefill'] = {
   day: isValidDay(qp.get('date')) ? qp.get('date')! : addDays(today, 7),
   startHour: Math.min(22, Math.max(6, Number(qp.get('start')) || settings.defaultStartHour || 10)),
@@ -67,11 +71,14 @@ if (f) {
   if (customerId) {
     const [c] = isUuid(customerId) ? await db.select().from(schema.customers).where(and(eq(schema.customers.tenantId, t.id), eq(schema.customers.id, customerId))).limit(1) : [];
     if (c) customer = { email: c.email, name: c.name, phone: c.phone };
-  } else if (z.string().email().safeParse(prefill.email).success && prefill.name) {
+  } else if (z.email().safeParse(prefill.email).success && prefill.name) {
     customer = { email: prefill.email!, name: prefill.name!, phone: prefill.phone ?? '' };
   }
-  if (!r.ok) error = Object.values(r.errors)[0];
-  else if (!customer) error = 'Pick an existing customer or enter a name and valid email.';
+  if (!r.ok) { errors = r.errors; error = 'Please fix the highlighted fields — your entries are kept.'; }
+  else if (!customer) {
+    errors = customerId ? { customer: 'Pick a customer from the search results.' } : { ...(prefill.name ? {} : { name: 'Enter the customer’s name' }), ...(z.email().safeParse(prefill.email).success ? {} : { email: 'Enter a valid email for confirmations' }) };
+    error = 'Please fix the highlighted fields — your entries are kept.';
+  }
   else {
     try {
       const { booking } = await createBooking(t, {
@@ -85,8 +92,7 @@ if (f) {
         await db.update(schema.leads).set({ stage: status === 'quote' ? 'quoted' : 'won' }).where(and(eq(schema.leads.id, leadId), eq(schema.leads.tenantId, t.id)));
       }
       await logActivity(t.id, 'booking', `Manual ${status === 'quote' ? 'quote' : 'booking'} #${booking.number} for ${customer.name} · ${money(booking.totalCents)}`, { bookingId: booking.id });
-      flash(Astro.cookies, `${status === 'quote' ? 'Quote' : 'Booking'} #${booking.number} created — ${money(booking.totalCents)}.`);
-      return Astro.redirect(`/app/bookings/${booking.id}`, 303);
+      return Astro.redirect(`/app/bookings/${booking.id}?done=created`, 303);
     } catch (e) {
       error = e instanceof BookingError ? e.message : 'Something went wrong creating the booking.';
       if (!(e instanceof BookingError)) console.error(e);
@@ -97,10 +103,20 @@ if (f) {
 const props: BuilderProps = {
   items: items.map((i) => ({ id: i.id, name: i.name, kind: i.kind, priceCents: i.priceCents, quantity: i.quantity, image: i.images[0], category: (i.categoryId && catName.get(i.categoryId)) || 'Rental', active: i.active })),
   customers: customers.map((c) => ({ id: c.id, name: c.name, email: c.email, phone: c.phone })),
-  surfaces: settings.surfaces ?? [], hasWaiver: !!settings.damageWaiverBps, prefill, error,
+  surfaces: settings.surfaces ?? [], hasWaiver: !!settings.damageWaiverBps, prefill, error, errors,
 };
 ---
 <AppLayout title="New booking" section="bookings" subtitle="Phone order or quote — live availability and pricing as you build it." wide>
   <Fragment slot="actions"><a href="/app/bookings" class="btn-ghost">Cancel</a></Fragment>
+  <Crumbs items={[{ label: 'Bookings', href: '/app/bookings' }, { label: 'New booking' }]} />
+  {prefill.leadId && <p class="mb-4 rounded-xl bg-brand-soft/60 border border-brand/20 px-4 py-3 text-sm"><strong>Converting a lead.</strong> We prefilled what they told us — saving marks the lead {`“won”`} (or “quoted” if you save a quote). <a href="/app/customers/leads" class="text-brand font-semibold">Back to leads</a></p>}
+  <Help benefit="Take a phone order in under a minute with the same live availability and pricing your website uses — no double-bookings, no math.">
+    <ul>
+      <li>Availability updates as you change the date, time and items — numbers include setup & teardown buffers.</li>
+      <li>Manual bookings can override online rules (lead time, blackouts, zone minimums). You’ll see a note when you do.</li>
+      <li>Save as <strong>Quote</strong> to send a price without committing, <strong>Pending</strong> to hold it awaiting a deposit, or <strong>Confirmed</strong> when it’s a sure thing.</li>
+    </ul>
+  </Help>
   <BookingBuilder client:load {...props} />
+  <SubmitGuard />
 </AppLayout>

@@ -15,6 +15,13 @@ export function done(Astro: AstroGlobal, msg: string, to?: string, kind: 'ok' | 
   return Astro.redirect(to ?? Astro.url.pathname + Astro.url.search, 303);
 }
 
+/** PRG redirect to a next-step screen (no flash — the page renders a NextSteps panel from ?done=…). */
+export const go = (Astro: AstroGlobal, to: string) => Astro.redirect(to, 303);
+
+/** Spread onto an input to mark it invalid and link its error message. */
+export const invalid = (errors: Record<string, string>, k: string): { 'aria-invalid'?: 'true'; 'aria-describedby'?: string } =>
+  errors[k] ? { 'aria-invalid': 'true', 'aria-describedby': `${k}-err` } : {};
+
 export const fmtDay = (d: Date | null | undefined, tz: string) => (d ? formatLocal(d, tz, { month: 'short', day: 'numeric', year: 'numeric' }) : '—');
 export const fmtDateTime = (d: Date | null | undefined, tz: string) => (d ? formatLocal(d, tz, { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' }) : '—');
 

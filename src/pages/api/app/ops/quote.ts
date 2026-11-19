@@ -11,12 +11,12 @@ const Body = z.object({
   startHour: z.number().int().min(0).max(23),
   endHour: z.number().int().min(0).max(24),
   overnight: z.boolean().optional(),
-  lines: z.array(z.object({ itemId: z.string().uuid(), qty: z.number().int().min(1).max(50) })).max(40).default([]),
+  lines: z.array(z.object({ itemId: z.uuid(), qty: z.number().int().min(1).max(50) })).max(40).default([]),
   zip: z.string().max(10).default(''),
   surface: z.string().max(40).optional(),
   damageWaiver: z.boolean().optional(),
   coupon: z.string().max(40).optional(),
-  excludeBookingId: z.string().uuid().optional(),
+  excludeBookingId: z.uuid().optional(),
 });
 
 const json = (b: unknown, status = 200) => new Response(JSON.stringify(b), { status, headers: { 'content-type': 'application/json', 'cache-control': 'no-store' } });

@@ -1,0 +1,130 @@
+---
+/** Settings → Domains (owner only): free subdomain, custom domains with TXT/CNAME verification. */
+import { and, eq } from 'drizzle-orm';
+import { resolveTxt } from 'node:dns/promises';
+import Shell from './_Shell.astro';
+import OwnerOnly from './_OwnerOnly.astro';
+import Help from '../../../components/ops/Help.astro';
+import Err from '../../../components/ops/Err.astro';
+import Icon from '../../../components/Icon.astro';
+import { getDb, schema } from '../../../db/client';
+import { token } from '../../../lib/util';
+import { formData, str, flash } from '../../../lib/forms';
+import { siteOrigin, sitesBaseDomain, isPlatformHost, invalidateTenantCache } from '../../../lib/tenant';
+import { opsCtx, isUuid } from '../../../lib/ops/ctx';
+import { logActivity } from '../../../lib/ops/stats';
+
+const { t, isOwner } = opsCtx(Astro);
+const db = await getDb();
+const D = schema.domains;
+const CNAME = process.env.SITES_CNAME_TARGET ?? 'cname.bounceos.app';
+let error = '';
+let draft = '';
+
+const f = isOwner ? await formData(Astro) : null;
+if (f) {
+  const action = str(f, '_action', 20);
+  const id = str(f, 'id', 40);
+  const [d] = isUuid(id) ? await db.select().from(D).where(and(eq(D.id, id), eq(D.tenantId, t.id))).limit(1) : [];
+  if (action === 'add') {
+    draft = str(f, 'hostname', 253).toLowerCase().replace(/^https?:\/\//, '').replace(/\/.*$/, '').replace(/\.$/, '');
+    if (!/^(?=.{4,253}$)([a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,63}$/.test(draft)) error = 'Enter a domain like bouncebrigade.com or www.bouncebrigade.com';
+    else if (isPlatformHost(draft) || draft.endsWith('.' + sitesBaseDomain()) || /(^|\.)bounceos\.app$/.test(draft)) error = 'That’s a BounceOS address — use a domain you own.';
+    else {
+      try {
+        await db.insert(D).values({ tenantId: t.id, hostname: draft, verificationToken: token(16) });
+        flash(Astro.cookies, `${draft} added. Add the two DNS records below, then click Verify.`);
+        return Astro.redirect('/app/settings/domains', 303);
+      } catch { error = 'That domain is already connected to a BounceOS site.'; }
+    }
+  } else if (d && action === 'verify') {
+    const name = `_bounceos.${d.hostname}`;
+    let ok = false, found: string[] = [];
+    try { found = (await resolveTxt(name)).map((r) => r.join('')); ok = found.some((v) => v.trim() === `bounceos-verify=${d.verificationToken}`); } catch { /* NXDOMAIN / timeout */ }
+    if (ok) {
+      const any = await db.select().from(D).where(and(eq(D.tenantId, t.id), eq(D.verified, true))).limit(1);
+      await db.update(D).set({ verified: true, isPrimary: any.length === 0 ? true : d.isPrimary }).where(eq(D.id, d.id));
+      invalidateTenantCache();
+      await logActivity(t.id, 'domain', `${d.hostname} verified`);
+      flash(Astro.cookies, `${d.hostname} verified! It can take a few minutes for SSL to finish.`);
+    } else flash(Astro.cookies, found.length ? `Found a TXT record on ${name}, but it doesn’t match yet. DNS changes can take up to an hour.` : `No TXT record found on ${name} yet. DNS changes can take up to an hour — try again soon.`, 'error');
+    return Astro.redirect('/app/settings/domains#d-' + d.id, 303);
+  } else if (d && action === 'primary' && d.verified) {
+    await db.update(D).set({ isPrimary: false }).where(eq(D.tenantId, t.id));
+    await db.update(D).set({ isPrimary: true }).where(eq(D.id, d.id));
+    invalidateTenantCache();
+    flash(Astro.cookies, `${d.hostname} is now your main website address.`);
+    return Astro.redirect('/app/settings/domains', 303);
+  } else if (d && action === 'delete') {
+    await db.delete(D).where(eq(D.id, d.id));
+    invalidateTenantCache();
+    flash(Astro.cookies, `${d.hostname} disconnected.`);
+    return Astro.redirect('/app/settings/domains', 303);
+  }
+}
+const rows = isOwner ? await db.select().from(D).where(eq(D.tenantId, t.id)).orderBy(D.createdAt) : [];
+const base = sitesBaseDomain();
+const free = base === 'localhost' ? `${t.slug}.localhost:4321` : `${t.slug}.${base}`;
+const origin = await siteOrigin(t);
+const apex = (h: string) => h.split('.').length === 2;
+---
+<Shell title="Domains" subtitle="Your free BounceOS address and your own .com." active="domains">
+  {!isOwner ? <OwnerOnly what="domains" /> : (
+    <>
+      <Help benefit="A branded domain builds trust with parents and keeps all your Google ranking on an address you own forever.">
+        <ul>
+          <li>Add the <strong>TXT</strong> record to prove you own the domain, and the <strong>CNAME</strong> to point it at your BounceOS site.</li>
+          <li>For a bare domain (bouncebrigade.com) use your DNS host’s ALIAS/ANAME or “CNAME flattening”, or connect <strong>www.</strong> instead.</li>
+          <li>DNS changes usually take 5–60 minutes. SSL certificates are issued automatically after verification.</li>
+        </ul>
+      </Help>
+      <section class="card p-5" aria-labelledby="free-h">
+        <div class="flex flex-wrap items-center gap-3">
+          <span class="grid place-items-center size-10 rounded-xl bg-brand-soft text-brand"><Icon name="globe" /></span>
+          <div class="min-w-0 flex-1"><h2 id="free-h" class="font-bold">Free BounceOS address</h2><p class="font-mono text-sm break-all">{free}</p></div>
+          <span class="chip bg-green-100 text-green-800"><Icon name="check" size={12} />Always on</span>
+          <a href={origin} target="_blank" rel="noopener" class="btn-ghost !min-h-9 text-xs"><Icon name="external" size={14} />Open site</a>
+        </div>
+      </section>
+
+      <div class="space-y-4 mt-6">
+        {rows.map((d) => (
+          <section id={`d-${d.id}`} class="card p-5 scroll-mt-20" aria-label={d.hostname}>
+            <div class="flex flex-wrap items-center gap-2">
+              <h2 class="font-bold font-mono break-all">{d.hostname}</h2>
+              {d.verified ? <span class="chip bg-green-100 text-green-800"><Icon name="check" size={12} />Verified</span> : <span class="chip bg-amber-100 text-amber-900"><Icon name="clock" size={12} />Waiting for DNS</span>}
+              {d.isPrimary && <span class="chip bg-brand-soft text-brand">Primary</span>}
+              <div class="ml-auto flex gap-2">
+                {!d.verified && <form method="post"><input type="hidden" name="_action" value="verify" /><input type="hidden" name="id" value={d.id} /><button class="btn-primary !min-h-9 text-xs" data-busy-label="Checking DNS…">Verify</button></form>}
+                {d.verified && !d.isPrimary && <form method="post"><input type="hidden" name="_action" value="primary" /><input type="hidden" name="id" value={d.id} /><button class="btn-ghost !min-h-9 text-xs">Make primary</button></form>}
+                <form method="post" data-confirm={`Disconnect ${d.hostname}? Visitors to it will stop reaching your site.`}><input type="hidden" name="_action" value="delete" /><input type="hidden" name="id" value={d.id} /><button class="btn-danger !min-h-9 text-xs">Remove</button></form>
+              </div>
+            </div>
+            {!d.verified && (
+              <div class="mt-4 overflow-x-auto">
+                <p class="text-sm text-ink-2 mb-2">Add these records at your domain registrar (GoDaddy, Namecheap, Cloudflare…):</p>
+                <table class="table text-xs">
+                  <thead><tr><th scope="col">Type</th><th scope="col">Name / host</th><th scope="col">Value</th></tr></thead>
+                  <tbody>
+                    <tr><td class="font-bold">TXT</td><td class="font-mono select-all">_bounceos.{d.hostname}</td><td class="font-mono select-all break-all">bounceos-verify={d.verificationToken}</td></tr>
+                    <tr><td class="font-bold">{apex(d.hostname) ? 'ALIAS / CNAME' : 'CNAME'}</td><td class="font-mono select-all">{d.hostname}</td><td class="font-mono select-all">{CNAME}</td></tr>
+                  </tbody>
+                </table>
+              </div>
+            )}
+          </section>
+        ))}
+      </div>
+
+      <form method="post" class="card p-5 mt-6 border-dashed border-2 border-brand/30" novalidate>
+        <input type="hidden" name="_action" value="add" />
+        <h2 class="font-bold text-lg">Connect a domain you own</h2>
+        <div class="flex flex-col sm:flex-row gap-2 mt-3">
+          <div class="flex-1"><label class="sr-only" for="hostname">Domain</label><input id="hostname" name="hostname" class="input font-mono" placeholder="www.bouncebrigade.com" value={draft} aria-invalid={error ? 'true' : undefined} aria-describedby={error ? 'host-err' : undefined} /><Err id="host-err" msg={error} /></div>
+          <button class="btn-primary self-start" data-busy-label="Adding…"><Icon name="plus" size={16} />Add domain</button>
+        </div>
+        <p class="hint">Don’t have one yet? Most registrars sell .com domains for about $12/year.</p>
+      </form>
+    </>
+  )}
+</Shell>

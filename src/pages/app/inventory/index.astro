@@ -3,6 +3,8 @@
 import { and, eq, gt, inArray, isNull, or, sql } from 'drizzle-orm';
 import AppLayout from '../../../layouts/AppLayout.astro';
 import Icon from '../../../components/Icon.astro';
+import Help from '../../../components/ops/Help.astro';
+import Empty from '../../../components/ops/Empty.astro';
 import { getDb, schema } from '../../../db/client';
 import { money } from '../../../lib/pricing';
 import { opsCtx } from '../../../lib/ops/ctx';
@@ -30,6 +32,13 @@ const kindLabel: Record<string, string> = { rental: 'Rental', addon: 'Add-on', p
 <AppLayout title="Inventory" section="inventory" subtitle={`${counts.rental} rentals · ${counts.addon} add-ons · ${counts.package} packages · ${units} units owned`} wide>
   <Fragment slot="actions">{canManage && <a href="/app/inventory/new" class="btn-primary"><Icon name="plus" size={16} />Add item</a>}</Fragment>
 
+  <Help benefit="One source of truth for what you own: your website, phone bookings and the route planner all read live availability from here.">
+    <ul>
+      <li>Click an item to see its 30-day availability strip, upcoming bookings, maintenance log and ROI.</li>
+      <li>“% booked · 30d” shows how hard each unit works next month — low numbers are great candidates for a package or a featured spot.</li>
+      <li>Hidden items stay in your history and reports but can’t be booked online.</li>
+    </ul>
+  </Help>
   <div class="flex flex-wrap gap-3 items-center">
     <nav aria-label="Item type" class="flex gap-1.5 overflow-x-auto">
       {(['all', 'rental', 'addon', 'package'] as const).map((k) => (
@@ -47,14 +56,9 @@ const kindLabel: Record<string, string> = { rental: 'Rental', addon: 'Add-on', p
   </div>
 
   {items.length === 0 ? (
-    <div class="card p-10 text-center mt-4">
-      <span class="mx-auto grid place-items-center size-12 rounded-2xl bg-brand-soft text-brand"><Icon name="box" /></span>
-      <h2 class="font-bold text-lg mt-3">Add your first bounce house</h2>
-      <p class="text-sm text-ink-2 mt-1">Items appear on your website with live availability the moment you save them.</p>
-      <a href="/app/inventory/new" class="btn-primary mt-4"><Icon name="plus" size={16} />Add item</a>
-    </div>
+    <div class="mt-4"><Empty icon="box" title="Add your first bounce house" text="Items appear on your website with live availability the moment you save them — no per-item fees, ever." cta={{ href: '/app/inventory/new', label: 'Add item' }} learn={{ href: '/app/inventory/new?kind=package', label: 'Or build a package' }} /></div>
   ) : shown.length === 0 ? (
-    <p class="card p-6 mt-4 text-sm text-ink-2">No items match “{search}”.</p>
+    <div class="mt-4"><Empty icon="search" title={`No items match “${search}”`} text="Try a shorter search, or check another tab." cta={{ href: '/app/inventory/new', label: 'Add item' }} learn={{ href: '/app/inventory', label: 'Clear search' }} /></div>
   ) : (
     <ul class="grid gap-3 sm:grid-cols-2 xl:grid-cols-3 mt-4">
       {shown.map((i) => {

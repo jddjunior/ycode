@@ -18,6 +18,7 @@ export interface BuilderProps {
     notes?: string; leadId?: string; eventType?: string; damageWaiver: boolean; surface?: string; status?: string; coupon?: string;
   };
   error?: string;
+  errors?: Record<string, string>;
 }
 
 interface QuoteResp {
@@ -34,8 +35,14 @@ const money = (c: number) => new Intl.NumberFormat('en-US', { style: 'currency',
 const hourLabel = (h: number) => `${((h + 11) % 12) + 1}:00 ${h < 12 || h === 24 ? 'AM' : 'PM'}`;
 const HOURS = Array.from({ length: 17 }, (_, i) => i + 6);
 
+function FieldErr({ id, msg }: { id: string; msg?: string }) {
+  return msg ? <p id={id} role="alert" class="mt-1 text-xs font-semibold text-red-700">⚠ {msg}</p> : null;
+}
+
 export default function BookingBuilder(p: BuilderProps) {
   const pf = p.prefill;
+  const e = p.errors ?? {};
+  const inv = (k: string) => (e[k] ? { 'aria-invalid': true, 'aria-describedby': `${k}-err` } : {});
   const [day, setDay] = useState(pf.day);
   const [startHour, setStart] = useState(pf.startHour);
   const [endHour, setEnd] = useState(pf.endHour);
@@ -92,7 +99,7 @@ export default function BookingBuilder(p: BuilderProps) {
         <section class="card p-5" aria-labelledby="when-h">
           <h2 id="when-h" class="font-bold text-lg">1 · When & where</h2>
           <div class="grid gap-3 sm:grid-cols-4 mt-3">
-            <div class="sm:col-span-2"><label class="label" for="day">Event date</label><input id="day" name="day" type="date" class="input" value={day} required onInput={(e) => setDay((e.target as HTMLInputElement).value)} /></div>
+            <div class="sm:col-span-2"><label class="label" for="day">Event date</label><input id="day" name="day" type="date" class="input" value={day} required {...inv('day')} onInput={(ev) => setDay((ev.target as HTMLInputElement).value)} /><FieldErr id="day-err" msg={e.day} /></div>
             <div><label class="label" for="startHour">Start</label>
               <select id="startHour" name="startHour" class="input" value={String(startHour)} onChange={(e) => setStart(Number((e.target as HTMLSelectElement).value))}>{HOURS.map((h) => <option value={h}>{hourLabel(h)}</option>)}</select></div>
             <div><label class="label" for="endHour">End</label>
@@ -100,10 +107,10 @@ export default function BookingBuilder(p: BuilderProps) {
           </div>
           <label class="mt-3 inline-flex items-center gap-2 text-sm"><input type="checkbox" name="overnight" checked={overnight} onChange={(e) => setOvernight((e.target as HTMLInputElement).checked)} />Overnight rental (pickup next morning)</label>
           <div class="grid gap-3 sm:grid-cols-6 mt-3">
-            <div class="sm:col-span-3"><label class="label" for="address">Street address</label><input id="address" name="address" class="input" autocomplete="street-address" value={pf.address ?? ''} required /></div>
+            <div class="sm:col-span-3"><label class="label" for="address">Street address</label><input id="address" name="address" class="input" autocomplete="street-address" value={pf.address ?? ''} required {...inv('address')} /><FieldErr id="address-err" msg={e.address} /></div>
             <div class="sm:col-span-1"><label class="label" for="city">City</label><input id="city" name="city" class="input" value={pf.city ?? ''} /></div>
             <div class="sm:col-span-1"><label class="label" for="state">State</label><input id="state" name="state" class="input" maxLength={2} value={pf.state ?? ''} /></div>
-            <div class="sm:col-span-1"><label class="label" for="zip">ZIP</label><input id="zip" name="zip" class="input" inputMode="numeric" maxLength={10} value={zip} required onInput={(e) => setZip((e.target as HTMLInputElement).value)} /></div>
+            <div class="sm:col-span-1"><label class="label" for="zip">ZIP</label><input id="zip" name="zip" class="input" inputMode="numeric" maxLength={10} value={zip} required {...inv('zip')} onInput={(ev) => setZip((ev.target as HTMLInputElement).value)} /><FieldErr id="zip-err" msg={e.zip} /></div>
           </div>
           <div class="grid gap-3 sm:grid-cols-2 mt-3">
             <div><label class="label" for="surface">Setup surface</label>
@@ -125,6 +132,7 @@ export default function BookingBuilder(p: BuilderProps) {
             <div class="sm:ml-auto w-full sm:w-56"><label class="sr-only" for="itemq">Filter items</label><input id="itemq" class="input" type="search" placeholder="Filter items" value={filter} onInput={(e) => setFilter((e.target as HTMLInputElement).value)} /></div>
           </div>
           {netErr && <p class="text-sm text-red-700 mt-2">{netErr}</p>}
+          <FieldErr id="lines-err" msg={e.lines} />
           <ul class="mt-4 grid gap-2 sm:grid-cols-2">
             {items.map((it) => {
               const free = q?.free?.[it.id];
@@ -175,13 +183,14 @@ export default function BookingBuilder(p: BuilderProps) {
                     {custMatches.map((c) => <li><button type="button" class="w-full text-left px-3 py-2 hover:bg-canvas" onClick={() => { setCustomerId(c.id); setCustQ(''); }}><span class="text-sm font-semibold">{c.name || c.email}</span> <span class="text-xs text-ink-2">{c.email} {c.phone}</span></button></li>)}
                   </ul>
                   {custQ.length >= 2 && !custMatches.length && <p class="hint">No match — switch to “New customer”.</p>}
+                  <FieldErr id="customer-err" msg={e.customer} />
                 </>
               )}
             </div>
           ) : (
             <div class="grid gap-3 sm:grid-cols-3 mt-3">
-              <div><label class="label" for="name">Name</label><input id="name" name="name" class="input" autoComplete="name" value={pf.name ?? ''} required /></div>
-              <div><label class="label" for="email">Email</label><input id="email" name="email" type="email" class="input" autoComplete="email" value={pf.email ?? ''} required /></div>
+              <div><label class="label" for="name">Name</label><input id="name" name="name" class="input" autoComplete="name" value={pf.name ?? ''} required {...inv('name')} /><FieldErr id="name-err" msg={e.name} /></div>
+              <div><label class="label" for="email">Email</label><input id="email" name="email" type="email" class="input" autoComplete="email" value={pf.email ?? ''} required {...inv('email')} /><FieldErr id="email-err" msg={e.email} /></div>
               <div><label class="label" for="phone">Phone</label><input id="phone" name="phone" type="tel" class="input" autoComplete="tel" value={pf.phone ?? ''} /></div>
             </div>
           )}
@@ -220,7 +229,7 @@ export default function BookingBuilder(p: BuilderProps) {
               ))}
             </div>
           </fieldset>
-          <button class="btn-primary w-full mt-4" disabled={!canSubmit}>Create booking{pr ? ` · ${money(pr.quote.totalCents)}` : ''}</button>
+          <button class="btn-primary w-full mt-4" disabled={!canSubmit} data-busy-label="Creating booking…">Create booking{pr ? ` · ${money(pr.quote.totalCents)}` : ''}</button>
           {!canSubmit && <p class="hint text-center">{!lines.length ? 'Add at least one item.' : mode === 'existing' && !customerId ? 'Pick a customer.' : 'Resolve availability conflicts.'}</p>}
         </section>
       </aside>

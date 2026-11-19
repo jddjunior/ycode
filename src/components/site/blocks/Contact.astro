@@ -18,10 +18,16 @@ const { minDay } = bookableDays(t);
       {sent ? (
         <div role="status" class="mt-6 rounded-2xl bg-soft p-5">
           <p class="font-display text-xl font-bold">Thanks — we got it! 🎉</p>
-          <p class="mt-1 s-sub">We usually reply within the hour during business hours. Want to lock a date right now? <a class="font-bold underline" href={ctx.href('/rentals#check')}>Check availability</a>.</p>
+          <p class="mt-1 s-sub">A real person will reply by text or email — usually within the hour during the day, and first thing next morning for late-night requests.</p>
+          <p class="mt-3 font-bold">Need an answer right now?</p>
+          <div class="mt-2 flex flex-wrap gap-2">
+            {t.phone && <a href={smsHref(t.phone)} class="s-btn s-btn-primary s-btn-sm"><Icon name="message" size={16} /> Text us</a>}
+            {t.phone && <a href={telHref(t.phone)} class="s-btn s-btn-ghost s-btn-sm"><Icon name="phone" size={16} /> Call {t.phone}</a>}
+            <a href={ctx.href('/rentals#check')} class="s-btn s-btn-cta s-btn-sm">Check a date & book online</a>
+          </div>
         </div>
       ) : (
-        <form method="post" action={`${ctx.api}/lead`} class="mt-6 grid sm:grid-cols-2 gap-4">
+        <form method="post" action={`${ctx.api}/lead`} class="mt-6 grid sm:grid-cols-2 gap-4" oninput="this.email.setCustomValidity('')" onsubmit="var e=this.email,p=this.phone;if(!e.value.trim()&&p.value.replace(/\D/g,'').length<7){e.setCustomValidity('Add an email or a phone number so we can reply');e.reportValidity();return false}var b=this.querySelector('[type=submit]');b.setAttribute('aria-disabled','true');b.textContent='Sending…'">
           {error && <p role="alert" class="sm:col-span-2 s-err">{error}</p>}
           <input type="hidden" name="return" value={returnPath} />
           <input type="hidden" name="source" value="quote_form" />

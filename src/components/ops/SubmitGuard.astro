@@ -5,12 +5,12 @@
   document.addEventListener('submit', (e) => {
     const form = e.target as HTMLFormElement;
     if (!(form instanceof HTMLFormElement) || form.method.toLowerCase() !== 'post') return;
-    const msg = form.dataset.confirm;
+    const btn = (e as SubmitEvent).submitter as HTMLButtonElement | null;
+    const msg = btn?.dataset.confirm ?? form.dataset.confirm;
     if (msg && !window.confirm(msg)) { e.preventDefault(); return; }
     if (form.dataset.busy === '1') { e.preventDefault(); return; }
     form.dataset.busy = '1';
     form.setAttribute('aria-busy', 'true');
-    const btn = (e as SubmitEvent).submitter as HTMLButtonElement | null;
     if (btn) {
       btn.classList.add('opacity-70', 'cursor-wait');
       const label = btn.dataset.busyLabel;

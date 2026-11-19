@@ -4,6 +4,8 @@ import { and, desc, asc, eq, gte, lt, sql, inArray, or, ilike, type SQL } from '
 import AppLayout from '../../../layouts/AppLayout.astro';
 import Icon from '../../../components/Icon.astro';
 import StatusChip from '../../../components/ops/StatusChip.astro';
+import Help from '../../../components/ops/Help.astro';
+import Empty from '../../../components/ops/Empty.astro';
 import { getDb, schema } from '../../../db/client';
 import { money } from '../../../lib/pricing';
 import { opsCtx, dayBounds, monthBounds, isValidDay, localDay, addDays, time, STATUS, dayTitle } from '../../../lib/ops/ctx';
@@ -72,6 +74,13 @@ const qs = (o: Record<string, string>) => { const u = new URLSearchParams(); for
     </div>
   </Fragment>
 
+  <Help benefit="Every party in one place — who owes what, what’s confirmed, and which days are filling up — so nothing slips through the cracks on a busy weekend.">
+    <ul>
+      <li><strong>Hold</strong> = a shopper is paying right now (expires automatically). <strong>Quote</strong> = priced but not committed. <strong>Pending</strong> = reserved, waiting on a deposit. <strong>Confirmed</strong> = locked in.</li>
+      <li>“Balance due” lists every booking with money still to collect — open one to text a payment link or record cash.</li>
+      <li>In the calendar, click a day number to plan that day’s route; days at your max-events limit show “Full”.</li>
+    </ul>
+  </Help>
   {view === 'list' ? (
     <>
       <nav aria-label="Status filter" class="flex gap-1.5 overflow-x-auto pb-2 -mx-1 px-1">
@@ -89,12 +98,7 @@ const qs = (o: Record<string, string>) => { const u = new URLSearchParams(); for
       </form>
 
       {rows.length === 0 ? (
-        <div class="card mt-4 p-10 text-center">
-          <span class="mx-auto grid place-items-center size-12 rounded-2xl bg-brand-soft text-brand"><Icon name="calendar" /></span>
-          <h2 class="font-bold text-lg mt-3">No bookings match</h2>
-          <p class="text-sm text-ink-2 mt-1">Try another filter, or take a phone order in under a minute.</p>
-          <a href="/app/bookings/new" class="btn-primary mt-4"><Icon name="plus" size={16} />New booking</a>
-        </div>
+        <div class="mt-4"><Empty icon="calendar" title={search || fromDay || toDay ? 'No bookings match' : status === 'unpaid' ? 'Every balance is paid' : 'Nothing here yet'} text={status === 'unpaid' ? 'Nice — nobody owes you money right now.' : 'Website bookings land here automatically. Taking a phone order? It takes under a minute.'} cta={{ href: '/app/bookings/new', label: 'New booking' }} learn={{ href: '/app/bookings?view=calendar', label: 'Open the calendar' }} /></div>
       ) : (
         <>
           <p class="text-sm text-ink-2 mt-4 mb-2">{rows.length} booking{rows.length === 1 ? '' : 's'} · {money(totals.total)} total · <span class:list={[totals.due ? 'text-warn font-semibold' : '']}>{money(totals.due)} balance due</span></p>

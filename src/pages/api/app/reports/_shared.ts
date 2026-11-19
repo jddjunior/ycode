@@ -1,12 +1,13 @@
 /** Shared guard + response helper for report CSV endpoints. */
 import type { APIContext } from 'astro';
 import { localDay } from '../../../../lib/time';
+import type { Tenant } from '../../../../lib/auth';
 
-export function guard(ctx: APIContext) {
+export function guard(ctx: APIContext): Response | { t: Tenant; today: string } {
   const s = ctx.locals.session;
-  if (!s?.tenant) return { error: new Response('unauthorized', { status: 401 }) } as const;
-  if (s.role !== 'owner' && s.role !== 'manager') return { error: new Response('forbidden', { status: 403 }) } as const;
-  return { t: s.tenant, today: localDay(new Date(), s.tenant.timezone) } as const;
+  if (!s?.tenant) return new Response('unauthorized', { status: 401 });
+  if (s.role !== 'owner' && s.role !== 'manager') return new Response('forbidden', { status: 403 });
+  return { t: s.tenant, today: localDay(new Date(), s.tenant.timezone) };
 }
 
 export function csvResponse(name: string, body: string) {

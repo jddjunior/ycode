@@ -2,8 +2,11 @@
 import { eq } from 'drizzle-orm';
 import AppLayout from '../../../layouts/AppLayout.astro';
 import ItemForm from './_ItemForm.astro';
+import Crumbs from '../../../components/ops/Crumbs.astro';
+import Help from '../../../components/ops/Help.astro';
+import SubmitGuard from '../../../components/ops/SubmitGuard.astro';
 import { getDb, schema } from '../../../db/client';
-import { formData, flash, parse } from '../../../lib/forms';
+import { formData, parse } from '../../../lib/forms';
 import { opsCtx } from '../../../lib/ops/ctx';
 import { readItemForm, ItemSchema } from '../../../lib/ops/items';
 import { logActivity } from '../../../lib/ops/stats';
@@ -17,29 +20,39 @@ const [cats, others] = await Promise.all([
 ]);
 const valid = new Set([...others.map((o) => o.id), ...cats.map((c) => 'cat:' + c.id)]);
 const qk = Astro.url.searchParams.get('kind');
-let item: Record<string, unknown> = { kind: qk === 'addon' || qk === 'package' ? qk : 'rental', active: true, images: [] };
+const withId = Astro.url.searchParams.get('with');
+let item: Record<string, unknown> = { kind: qk === 'addon' || qk === 'package' ? qk : 'rental', active: true, images: [], bundle: withId && valid.has(withId) ? [{ itemId: withId, qty: 1 }] : [] };
 let error = '';
+let errors: Record<string, string> = {};
 
 const f = await formData(Astro);
 if (f) {
   const v = readItemForm(f, valid);
   item = v;
   const r = parse(ItemSchema, v);
-  if (!r.ok) error = Object.values(r.errors)[0];
-  else if (v.kind === 'package' && !v.bundle.length) error = 'Packages need at least one component item.';
+  if (!r.ok) { errors = r.errors; error = 'Please fix the highlighted fields — your changes are kept.'; }
+  else if (v.kind === 'package' && !v.bundle.length) { errors = { bundle: 'Set a quantity for at least one item' }; error = 'Packages need at least one component item.'; }
   else {
     try {
       const [row] = await db.insert(schema.items).values({ ...v, tenantId: t.id }).returning();
       await logActivity(t.id, 'inventory', `New ${v.kind} added: ${v.name}`, { itemId: row.id });
-      flash(Astro.cookies, `${v.name} added — it’s live on your site${v.active ? '' : ' once you mark it active'}.`);
-      return Astro.redirect(`/app/inventory/${row.id}`, 303);
+      return Astro.redirect(`/app/inventory/${row.id}?done=created`, 303);
     } catch (e) {
-      error = String((e as Error).message).includes('items_slug_uq') ? 'Another item already uses that URL slug.' : 'Couldn’t save the item.';
+      if (String((e as Error).message).includes('items_slug_uq')) { errors = { slug: 'Another item already uses this URL — change the slug' }; error = 'That URL slug is taken.'; } else error = 'Couldn’t save the item — please try again.';
     }
   }
 }
 ---
 <AppLayout title="Add item" section="inventory" subtitle="Rentals, add-ons and money-saving packages." wide>
   <Fragment slot="actions"><a href="/app/inventory" class="btn-ghost">Cancel</a></Fragment>
-  <ItemForm item={item} categories={cats} others={others} surfaces={settings.surfaces ?? []} error={error} submitLabel="Create item" />
+  <Crumbs items={[{ label: 'Inventory', href: '/app/inventory' }, { label: 'Add item' }]} />
+  <Help benefit="Every item you add appears on your website with real-time availability and SEO-ready pages — and you’re never charged per item.">
+    <ul>
+      <li><strong>Rentals</strong> are your inflatables, tents and games. <strong>Add-ons</strong> are extras like generators and concessions offered at checkout. <strong>Packages</strong> bundle items at a set price and reserve each component.</li>
+      <li>Specs (size, outlets, surfaces, ages) answer the top questions parents ask — and help you rank for searches like “water slide for 10 year olds”.</li>
+      <li>Fill in <strong>purchase cost</strong> to see ROI and payback in Reports.</li>
+    </ul>
+  </Help>
+  <ItemForm item={item} categories={cats} others={others} surfaces={settings.surfaces ?? []} error={error} errors={errors} submitLabel="Create item" />
+  <SubmitGuard />
 </AppLayout>

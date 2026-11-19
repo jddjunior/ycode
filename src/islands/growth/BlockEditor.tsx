@@ -1,5 +1,5 @@
 /** @jsxImportSource preact */
-import { useState } from 'preact/hooks';
+import { useEffect, useState } from 'preact/hooks';
 import { BLOCK_DEFS, defFor, LIMITS, TRUST_ICONS, type FieldDef } from '../../lib/growth/blockdefs';
 
 interface Block { id: string; type: string; props: Record<string, unknown> }
@@ -91,6 +91,11 @@ export default function BlockEditor({ pageId, initial, previewUrl }: Props) {
   const [status, setStatus] = useState<{ kind: 'idle' | 'saving' | 'ok' | 'error'; msg?: string }>({ kind: 'idle' });
   const [dirty, setDirty] = useState(false);
 
+  useEffect(() => {
+    const h = (e: BeforeUnloadEvent) => { if (dirty) { e.preventDefault(); e.returnValue = ''; } };
+    window.addEventListener('beforeunload', h);
+    return () => window.removeEventListener('beforeunload', h);
+  }, [dirty]);
   const update = (next: Block[]) => { setBlocks(next); setDirty(true); setStatus({ kind: 'idle' }); };
   const move = (i: number, d: number) => { const n = [...blocks]; const j = i + d; if (j < 0 || j >= n.length) return; [n[i], n[j]] = [n[j], n[i]]; update(n); };
   const remove = (i: number) => { if (confirm(`Remove the ${defFor(blocks[i].type)?.label ?? blocks[i].type} block?`)) update(blocks.filter((_, j) => j !== i)); };
@@ -108,7 +113,7 @@ export default function BlockEditor({ pageId, initial, previewUrl }: Props) {
       const res = await fetch('/api/app/website/blocks', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ pageId, blocks }) });
       const j = await res.json().catch(() => ({}));
       if (!res.ok) { setStatus({ kind: 'error', msg: j.error ?? `Save failed (${res.status})` }); return; }
-      setBlocks(j.blocks); setDirty(false); setStatus({ kind: 'ok', msg: 'Saved. Your live site is updated.' });
+      setBlocks(j.blocks); setDirty(false); setStatus({ kind: 'ok', msg: 'Saved — changes are on your site now.' });
     } catch { setStatus({ kind: 'error', msg: 'Network error — try again.' }); }
   }
 
@@ -124,7 +129,16 @@ export default function BlockEditor({ pageId, initial, previewUrl }: Props) {
           <a class="btn-ghost" href={previewUrl} target="_blank" rel="noopener">Preview</a>
           <button type="button" class="btn-primary" disabled={status.kind === 'saving' || !dirty} onClick={save}>{status.kind === 'saving' ? 'Saving…' : dirty ? 'Save changes' : 'Saved'}</button>
         </div>
-        {status.msg && <p role="status" class={`w-full text-sm font-medium ${status.kind === 'error' ? 'text-danger' : 'text-mint'}`}>{status.msg}</p>}
+        <div role="status" aria-live="polite" class="w-full empty:hidden">
+          {status.kind === 'error' && <p class="text-sm font-medium text-danger">{status.msg}</p>}
+          {status.kind === 'ok' && (
+            <p class="text-sm font-medium text-green-800 flex flex-wrap items-center gap-x-3 gap-y-1">
+              <span>✓ {status.msg}</span>
+              <a class="text-brand underline-offset-2 hover:underline" href={previewUrl} target="_blank" rel="noopener">View the page</a>
+              <a class="text-brand underline-offset-2 hover:underline" href="/app/seo#pages">Check SEO score</a>
+            </p>
+          )}
+        </div>
       </div>
 
       {blocks.length === 0 && <div class="card p-8 text-center text-ink-2 text-sm">No blocks yet. Add a Hero first, then the sections you need.</div>}

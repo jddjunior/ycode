@@ -60,7 +60,7 @@ export async function mergeVarsFor(t: Tenant, cust: Pick<Customer, 'name' | 'cel
   };
 }
 
-async function deliver(db: DB, t: Tenant, camp: Pick<Campaign, 'id' | 'channel' | 'subject' | 'body'>, cust: Customer, origin: string, extra?: Record<string, string>, bookingId?: string) {
+async function deliver(t: Tenant, camp: Pick<Campaign, 'id' | 'channel' | 'subject' | 'body'>, cust: Customer, origin: string, extra?: Record<string, string>, bookingId?: string) {
   const vars = await mergeVarsFor(t, cust, { channel: camp.channel, campaignId: camp.id, origin, extra });
   return send({
     tenantId: t.id, channel: camp.channel, to: camp.channel === 'email' ? cust.email : cust.phone,
@@ -79,7 +79,7 @@ export async function sendCampaignNow(db: DB, t: Tenant, campaignId: string): Pr
   const origin = await siteOrigin(t);
   const people = await segmentCustomers(db, t.id, camp.segment, camp.channel);
   let n = 0;
-  for (const p of people) { const m = await deliver(db, t, camp, p, origin); if (m.status !== 'failed') n++; }
+  for (const p of people) { const m = await deliver(t, camp, p, origin); if (m.status !== 'failed') n++; }
   await db.update(schema.campaigns).set({ status: 'sent', sentCount: sql`${schema.campaigns.sentCount} + ${n}`, scheduledAt: camp.scheduledAt ?? new Date() }).where(eq(schema.campaigns.id, camp.id));
   return n;
 }
@@ -123,7 +123,7 @@ export async function runBirthday(db: DB, t: Tenant, camp: Campaign, now = new D
   let n = 0;
   for (const p of people) {
     if ((camp.channel === 'email' ? !p.email : !p.phone) || await alreadySent(db, camp.id, p.id, 300)) continue;
-    if ((await deliver(db, t, camp, p, origin)).status !== 'failed') n++;
+    if ((await deliver(t, camp, p, origin)).status !== 'failed') n++;
   }
   await bump(db, camp.id, n);
   return n;
@@ -192,7 +192,7 @@ export async function runSeasonal(db: DB, t: Tenant, camp: Campaign, now = new D
   let n = 0;
   for (const p of people) {
     if (await alreadySent(db, camp.id, p.id, 300)) continue;
-    if ((await deliver(db, t, camp, p, origin)).status !== 'failed') n++;
+    if ((await deliver(t, camp, p, origin)).status !== 'failed') n++;
   }
   await bump(db, camp.id, n);
   return n;

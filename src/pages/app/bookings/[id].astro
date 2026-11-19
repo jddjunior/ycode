@@ -6,6 +6,10 @@ import AppLayout from '../../../layouts/AppLayout.astro';
 import Icon from '../../../components/Icon.astro';
 import StatusChip from '../../../components/ops/StatusChip.astro';
 import WeatherBadge from '../../../components/ops/WeatherBadge.astro';
+import Crumbs from '../../../components/ops/Crumbs.astro';
+import NextSteps from '../../../components/ops/NextSteps.astro';
+import Help from '../../../components/ops/Help.astro';
+import SubmitGuard from '../../../components/ops/SubmitGuard.astro';
 import { getDb, schema } from '../../../db/client';
 import { money } from '../../../lib/pricing';
 import { bookingWithLines, recordPayment } from '../../../lib/booking';
@@ -36,7 +40,8 @@ if (f && canManage) {
     if (!allowed[to]?.includes(b.status)) { flash(Astro.cookies, `Can’t change a ${b.status} booking to ${to}.`, 'error'); return Astro.redirect(self, 303); }
     await db.update(B).set({ status: to as typeof b.status, holdExpiresAt: null, updatedAt: new Date(), ...(to === 'completed' ? { deliveredAt: b.deliveredAt ?? new Date(), pickedUpAt: b.pickedUpAt ?? new Date() } : {}) }).where(where);
     await logActivity(t.id, 'booking', `Booking #${b.number} marked ${to}`, { bookingId: b.id });
-    flash(Astro.cookies, to === 'canceled' ? `Booking #${b.number} canceled — its inventory is free again.` : `Booking #${b.number} is now ${to}.`);
+    if (to === 'confirmed' || to === 'completed') return Astro.redirect(`${self}?done=${to}`, 303);
+    flash(Astro.cookies, to === 'canceled' ? `Booking #${b.number} canceled — its inventory is free again for other customers.` : `Booking #${b.number} is now ${to}.`);
   } else if (action === 'payment') {
     const r = parse(z.object({ method: z.enum(['cash', 'check']), amount: z.number().int().min(1, 'Enter an amount').max(10_000_000), ref: z.string().max(40) }), { method: str(f, 'method', 10), amount: cents(f, 'amount'), ref: str(f, 'ref', 40) });
     if (!r.ok) { flash(Astro.cookies, Object.values(r.errors)[0], 'error'); return Astro.redirect(self, 303); }
@@ -46,7 +51,7 @@ if (f && canManage) {
     if (res.duplicate) flash(Astro.cookies, `That ${d.method} reference was already recorded.`, 'error');
     else {
       await logActivity(t.id, 'payment', `${money(d.amount)} ${d.method} payment recorded on #${b.number}`, { bookingId: b.id });
-      flash(Astro.cookies, `${money(d.amount)} ${d.method} payment recorded.`);
+      return Astro.redirect(`${self}?done=paid&amt=${d.amount}`, 303);
     }
   } else if (action === 'notify') {
     const kind = str(f, 'kind', 20) === 'receipt' ? 'receipt' : 'link';
@@ -108,6 +113,11 @@ const checks = b.checklist ?? {};
 const canConfirm = ['hold', 'quote', 'pending', 'canceled'].includes(b.status);
 const canComplete = ['pending', 'confirmed'].includes(b.status);
 const canCancel = ['hold', 'quote', 'pending', 'confirmed'].includes(b.status);
+const done = Astro.url.searchParams.get('done');
+const paidAmt = Number(Astro.url.searchParams.get('amt')) || 0;
+const calUrl = `/app/bookings?view=calendar&month=${day.slice(0, 7)}`;
+const receiptForm = { _action: 'notify', kind: 'receipt', channel: 'email' };
+const linkForm = { _action: 'notify', kind: 'link', channel: c?.phone ? 'sms' : 'email' };
 ---
 <AppLayout title={`Booking #${b.number}`} section="bookings" subtitle={`${dayTitle(day, today)} · ${time(b.startsAt, tz)}–${time(b.endsAt, tz)} · ${b.eventType}`} wide>
   <Fragment slot="actions">
@@ -115,6 +125,27 @@ const canCancel = ['hold', 'quote', 'pending', 'confirmed'].includes(b.status);
     <a href={`/app/deliveries?day=${day}`} class="btn-ghost"><Icon name="truck" size={16} />Route day</a>
   </Fragment>
 
+  <Crumbs items={[{ label: 'Bookings', href: '/app/bookings' }, ...(c ? [{ label: c.name || c.email, href: `/app/customers/${c.id}` }] : []), { label: `#${b.number}` }]} />
+  {done === 'created' && (
+    <NextSteps title={`${b.status === 'quote' ? 'Quote' : 'Booking'} #${b.number} is on the books`} text={`${money(b.totalCents)} for ${c?.name ?? 'your customer'} on ${dayTitle(day, today)}. Inventory is reserved${b.status === 'quote' ? ' once they accept' : ''}.`} celebrate={b.status === 'confirmed'} dismiss={self}
+      actions={[
+        { label: b.status === 'quote' ? 'Email the quote' : 'Send confirmation', icon: 'message', primary: true, form: receiptForm },
+        { href: '#crew-h', label: 'Assign crew', icon: 'truck' },
+        { href: calUrl, label: 'View on calendar', icon: 'calendar' },
+      ]} />
+  )}
+  {done === 'confirmed' && (
+    <NextSteps title={`Booking #${b.number} confirmed!`} text="Date locked in. Let the customer know and get it on a truck." celebrate dismiss={self}
+      actions={[{ label: 'Send confirmation', icon: 'message', primary: true, form: receiptForm }, ...(balance > 0 ? [{ label: 'Text payment link', icon: 'dollar', form: linkForm }] : []), { href: `/app/deliveries?day=${day}`, label: 'Plan the route', icon: 'truck' }]} />
+  )}
+  {done === 'completed' && (
+    <NextSteps title={`Party #${b.number} complete`} text={balance > 0 ? `There’s still ${money(balance)} to collect.` : 'Paid in full. A happy customer is your best marketing.'} celebrate dismiss={self}
+      actions={[...(balance > 0 ? [{ label: 'Send payment link', icon: 'dollar', primary: true, form: linkForm }] : [{ href: '/app/marketing', label: 'Ask for a review', icon: 'star', primary: true }]), { href: `/app/crew?day=${localDay(b.endsAt, tz)}#stop-${b.id}-p`, label: 'Log cleaning', icon: 'sparkle' }, ...(c ? [{ href: `/app/bookings/new?customerId=${c.id}`, label: 'Book their next party', icon: 'plus' }] : [])]} />
+  )}
+  {done === 'paid' && (
+    <NextSteps title={`${money(paidAmt)} payment recorded`} text={balance > 0 ? `${money(balance)} balance remaining.` : 'Paid in full — nice!'} celebrate={balance === 0} dismiss={self}
+      actions={[{ label: 'Email a receipt', icon: 'message', primary: true, form: receiptForm }, { href: '/app/bookings?status=unpaid', label: 'Other balances due', icon: 'dollar' }]} />
+  )}
   <div class="flex flex-wrap items-center gap-2 mb-5">
     <StatusChip status={b.status} />
     <WeatherBadge risk={wx} />
@@ -131,7 +162,7 @@ const canCancel = ['hold', 'quote', 'pending', 'confirmed'].includes(b.status);
           {canConfirm && <form method="post"><input type="hidden" name="_action" value="status" /><input type="hidden" name="to" value="confirmed" /><button class="btn-primary"><Icon name="check" size={16} />{b.status === 'canceled' ? 'Reinstate & confirm' : 'Confirm'}</button></form>}
           {canComplete && <form method="post"><input type="hidden" name="_action" value="status" /><input type="hidden" name="to" value="completed" /><button class="btn-ghost"><Icon name="trophy" size={16} />Mark completed</button></form>}
           {b.status === 'completed' && <form method="post"><input type="hidden" name="_action" value="status" /><input type="hidden" name="to" value="pending" /><button class="btn-ghost">Reopen</button></form>}
-          {canCancel && <form method="post" class="sm:ml-auto" onsubmit="return confirm('Cancel this booking? Its inventory will be released.')"><input type="hidden" name="_action" value="status" /><input type="hidden" name="to" value="canceled" /><button class="btn-danger"><Icon name="x" size={16} />Cancel booking</button></form>}
+          {canCancel && <form method="post" class="sm:ml-auto" data-confirm={`Cancel booking #${b.number}? Its inventory is released for other customers. Payments are not refunded automatically.`}><input type="hidden" name="_action" value="status" /><input type="hidden" name="to" value="canceled" /><button class="btn-danger"><Icon name="x" size={16} />Cancel booking</button></form>}
         </section>
       )}
 
@@ -179,7 +210,7 @@ const canCancel = ['hold', 'quote', 'pending', 'confirmed'].includes(b.status);
                 <div><label class="label" for="amount">Amount ($)</label><input id="amount" name="amount" class="input" inputmode="decimal" required value={balance ? (balance / 100).toFixed(2) : ''} /></div>
               </div>
               <div><label class="label" for="ref">Check # / note <span class="text-ink-2 font-normal">(optional)</span></label><input id="ref" name="ref" class="input" maxlength="40" /></div>
-              <button class="btn-primary w-full"><Icon name="dollar" size={16} />Record payment</button>
+              <button class="btn-primary w-full" data-busy-label="Recording…"><Icon name="dollar" size={16} />Record payment</button>
             </form>
           )}
         </section>
@@ -287,8 +318,9 @@ const canCancel = ['hold', 'quote', 'pending', 'confirmed'].includes(b.status);
             {attrRows.map(([k, v]) => <div class="flex justify-between gap-3 py-1.5"><dt class="text-ink-2">{k}</dt><dd class="font-medium text-right break-all">{v}</dd></div>)}
           </dl>
         ) : <p class="text-sm text-ink-2 mt-2">Direct / manual booking.</p>}
-        <p class="text-xs text-ink-2 mt-3">Booked {dateTime(b.createdAt, tz)}</p>
+        <p class="text-xs text-ink-2 mt-3">Booked {dateTime(b.createdAt, tz)}{b.leadId && <> · <a href="/app/customers/leads" class="text-brand font-semibold">converted from a lead</a></>}</p>
       </section>
     </aside>
   </div>
+  <SubmitGuard />
 </AppLayout>

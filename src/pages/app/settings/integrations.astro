@@ -1,0 +1,70 @@
+---
+/** Settings → Tracking & socials (public IDs only — never secrets). */
+import { z } from 'zod';
+import Shell from './_Shell.astro';
+import Help from '../../../components/ops/Help.astro';
+import Err from '../../../components/ops/Err.astro';
+import Icon from '../../../components/Icon.astro';
+import { formData, str, flash, parse } from '../../../lib/forms';
+import { opsCtx } from '../../../lib/ops/ctx';
+import { updateTenant } from '../../../lib/ops/settings';
+import type { TenantIntegrations } from '../../../db/schema';
+
+const { t, canManage } = opsCtx(Astro);
+const FIELDS: { k: keyof TenantIntegrations; label: string; ph: string; re: RegExp; msg: string; hint: string; group: string }[] = [
+  { k: 'ga4Id', label: 'Google Analytics 4 measurement ID', ph: 'G-XXXXXXXXXX', re: /^G-[A-Z0-9]{4,15}$/, msg: 'Looks like G-ABC123XYZ', hint: 'GA4 → Admin → Data streams → your web stream.', group: 'Tracking' },
+  { k: 'metaPixelId', label: 'Meta Pixel ID', ph: '123456789012345', re: /^\d{8,20}$/, msg: 'Pixel IDs are 8–20 digits', hint: 'Events Manager → Data sources → your pixel.', group: 'Tracking' },
+  { k: 'googleAdsConversionId', label: 'Google Ads conversion ID', ph: 'AW-123456789', re: /^AW-\d{6,15}$/, msg: 'Looks like AW-123456789', hint: 'Fires on every completed booking.', group: 'Tracking' },
+  { k: 'googleAdsConversionLabel', label: 'Google Ads conversion label', ph: 'AbCdEfGhIjk', re: /^[A-Za-z0-9_-]{4,40}$/, msg: 'Letters, numbers, - and _', hint: 'From the conversion action’s tag setup.', group: 'Tracking' },
+  { k: 'gbpLocationId', label: 'Google Business Profile location ID', ph: '1234567890123456789', re: /^[A-Za-z0-9/_-]{4,80}$/, msg: 'Paste the numeric location ID', hint: 'Used for review links and posting.', group: 'Local & social' },
+  { k: 'facebookPageId', label: 'Facebook page', ph: 'bouncebrigadehtx', re: /^[A-Za-z0-9.]{3,80}$/, msg: 'Page username or ID', hint: 'facebook.com/<this part>', group: 'Local & social' },
+  { k: 'instagramHandle', label: 'Instagram handle', ph: 'bouncebrigade', re: /^[A-Za-z0-9._]{1,30}$/, msg: 'Without the @', hint: '', group: 'Local & social' },
+  { k: 'tiktokHandle', label: 'TikTok handle', ph: 'bouncebrigade', re: /^[A-Za-z0-9._]{2,24}$/, msg: 'Without the @', hint: '', group: 'Local & social' },
+];
+const cur = (t.integrations ?? {}) as TenantIntegrations;
+let v: Record<string, string> = Object.fromEntries(FIELDS.map((x) => [x.k, cur[x.k] ?? '']));
+let errors: Record<string, string> = {};
+const f = await formData(Astro);
+if (f && canManage) {
+  v = Object.fromEntries(FIELDS.map((x) => [x.k, str(f, x.k, 100).replace(/^@/, '').replace(/^https?:\/\/(www\.)?(facebook|instagram|tiktok)\.com\/@?/i, '').replace(/\/$/, '')]));
+  v.ga4Id = v.ga4Id.toUpperCase(); v.googleAdsConversionId = v.googleAdsConversionId.toUpperCase();
+  const r = parse(z.object(Object.fromEntries(FIELDS.map((x) => [x.k, z.union([z.literal(''), z.string().regex(x.re, x.msg)])]))), v);
+  if (!r.ok) errors = r.errors;
+  else {
+    const next: TenantIntegrations = { ...cur };
+    for (const x of FIELDS) { if (v[x.k]) next[x.k] = v[x.k]; else delete next[x.k]; }
+    await updateTenant(t.id, { integrations: next });
+    flash(Astro.cookies, 'Saved. Tracking tags go live on your website within a minute.');
+    return Astro.redirect('/app/settings/integrations', 303);
+  }
+}
+const groups = [...new Set(FIELDS.map((x) => x.group))];
+---
+<Shell title="Tracking & socials" subtitle="Connect analytics, ad conversions and your social profiles." active="integrations">
+  <Help benefit="See exactly which ads and posts turn into paid bookings — so you spend on what works and cut what doesn’t.">
+    <ul>
+      <li>Only <strong>public IDs</strong> go here — the same ones visible in your site’s HTML. Never paste API keys, passwords or access tokens.</li>
+      <li>BounceOS fires a purchase/conversion event with the booking value when a deposit is paid, and records UTM & click IDs on every booking (see “Where it came from” on a booking).</li>
+    </ul>
+  </Help>
+  {Object.keys(errors).length > 0 && <p role="alert" class="mb-4 rounded-xl bg-red-50 border border-red-200 text-red-800 text-sm px-4 py-3">Please fix the highlighted fields — nothing was saved yet.</p>}
+  <form method="post" class="space-y-6" novalidate>
+    {groups.map((g) => (
+      <section class="card p-5">
+        <h2 class="font-bold text-lg">{g}</h2>
+        <div class="grid gap-4 sm:grid-cols-2 mt-3">
+          {FIELDS.filter((x) => x.group === g).map((x) => (
+            <div>
+              <label class="label" for={x.k}>{x.label}</label>
+              <div class="relative"><input id={x.k} name={x.k} class="input font-mono text-sm pr-9" placeholder={x.ph} value={v[x.k]} disabled={!canManage} autocomplete="off" spellcheck="false" aria-invalid={errors[x.k] ? 'true' : undefined} aria-describedby={errors[x.k] ? `${x.k}-err` : undefined} />
+                {v[x.k] && !errors[x.k] && <span class="absolute right-3 top-1/2 -translate-y-1/2 text-green-600" aria-label="Connected"><Icon name="check" size={16} /></span>}</div>
+              <Err id={`${x.k}-err`} msg={errors[x.k]} />
+              {x.hint && <p class="hint">{x.hint}</p>}
+            </div>
+          ))}
+        </div>
+      </section>
+    ))}
+    {canManage && <div class="flex justify-end"><button class="btn-primary" data-busy-label="Saving…"><Icon name="check" size={16} />Save connections</button></div>}
+  </form>
+</Shell>

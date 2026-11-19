@@ -8,12 +8,15 @@ import { and, eq, sql } from 'drizzle-orm';
 import AppLayout from '../../layouts/AppLayout.astro';
 import Icon from '../../components/Icon.astro';
 import WeatherBadge from '../../components/ops/WeatherBadge.astro';
+import Help from '../../components/ops/Help.astro';
+import NextSteps from '../../components/ops/NextSteps.astro';
+import SubmitGuard from '../../components/ops/SubmitGuard.astro';
 import { getDb, schema } from '../../db/client';
 import { money } from '../../lib/pricing';
 import { formData, cents, flash } from '../../lib/forms';
 import { invalidateTenantCache } from '../../lib/tenant';
 import { opsCtx, monthBounds, dayTitle, shortDay, time, delta, addDays, dayBounds, localDay, type OpsSettings } from '../../lib/ops/ctx';
-import { stopsForDay, weatherFor, FULFIL_STATUSES } from '../../lib/ops/stops';
+import { stopsForDay, weatherFor } from '../../lib/ops/stops';
 import { bookedTotals, unpaidBalances, openLeads, utilization, partyStreak, recentActivity } from '../../lib/ops/stats';
 import { ACHIEVEMENTS, syncAchievements } from '../../lib/ops/achievements';
 
@@ -115,9 +118,9 @@ const days = [{ day: today, stops: todayStops }, { day: tomorrow, stops: tomorro
   {showWelcome && (
     <section class="card p-5 lg:p-6 mb-6 border-brand/30 bg-gradient-to-br from-brand-soft to-white" aria-labelledby="welcome-h">
       <div class="flex flex-wrap items-center gap-3">
-        <span class="grid place-items-center size-11 rounded-xl bg-brand text-white"><Icon name="sparkle" /></span>
+        <span class="hidden sm:grid place-items-center size-11 rounded-xl bg-brand text-white"><Icon name="sparkle" /></span>
         <div class="min-w-0 flex-1">
-          <h2 id="welcome-h" class="text-xl font-extrabold">Welcome to BounceOS! Let’s get you booking.</h2>
+          <h2 id="welcome-h" class="text-lg sm:text-xl font-extrabold">Welcome to BounceOS! Let’s get you booking.</h2>
           <p class="text-sm text-ink-2">Five quick steps — most operators finish in under 20 minutes.</p>
         </div>
         <p class="text-sm font-semibold tabular-nums">{stepsDone}/5 done</p>
@@ -134,8 +137,8 @@ const days = [{ day: today, stops: todayStops }, { day: tomorrow, stops: tomorro
               </span>
               <h3 class="font-bold text-sm">{x.title}</h3>
             </div>
-            <p class="text-xs text-ink-2 mt-2 flex-1">{x.text}</p>
-            {x.done ? <p class="text-xs font-semibold text-green-700 mt-3">Done</p> : <a href={x.href} class="text-sm font-semibold text-brand mt-3 inline-flex items-center gap-1">{x.cta}<Icon name="arrow" size={14} /></a>}
+            <p class:list={['text-xs text-ink-2 mt-2 flex-1', x.done && 'hidden md:block']}>{x.text}</p>
+            {x.done ? <p class="text-xs font-semibold text-green-700 mt-3 hidden md:block">Done</p> : <a href={x.href} class="text-sm font-semibold text-brand mt-3 inline-flex items-center gap-1">{x.cta}<Icon name="arrow" size={14} /></a>}
           </li>
         ))}
       </ol>
@@ -150,6 +153,17 @@ const days = [{ day: today, stops: todayStops }, { day: tomorrow, stops: tomorro
     </a>
   )}
 
+  {goalPct >= 100 && (
+    <NextSteps title={`Goal smashed — ${money(cur.revenue)} booked in ${thisMonth.label.split(' ')[0]}!`} text="You beat your monthly goal. Raise the bar or lock in next month while customers are excited." celebrate
+      actions={[{ href: '#goal-h', label: 'Raise the goal', icon: 'target', primary: true }, { href: '/app/marketing', label: 'Ask for reviews', icon: 'star' }, { href: '/app/reports', label: 'See what worked', icon: 'chart' }]} />
+  )}
+  <Help benefit="Open this every morning: today’s runs, weather risks and the money that needs chasing — the whole business on one screen.">
+    <ul>
+      <li>Weather flags use your depot location and your {settings.windLimitMph ?? 15} mph wind limit (change it in <a class="text-brand font-semibold" href="/app/settings/booking">Booking rules</a>). STOP means call the customer.</li>
+      <li>Every number is clickable — tap “Unpaid balances” to chase money, or “Open leads” to work your pipeline.</li>
+      <li>Achievements unlock automatically as you grow. Keep your party streak alive by booking at least one event every week.</li>
+    </ul>
+  </Help>
   {stopDays.length > 0 && (
     <div role="alert" class="mb-6 rounded-2xl bg-red-50 border border-red-200 p-4 flex items-start gap-3">
       <span class="grid place-items-center size-9 rounded-lg bg-red-600 text-white shrink-0"><Icon name="x" size={18} /></span>
@@ -217,8 +231,8 @@ const days = [{ day: today, stops: todayStops }, { day: tomorrow, stops: tomorro
       </div>
 
       <section class="card" aria-labelledby="week-h">
-        <header class="flex items-center gap-2 px-5 py-4 border-b border-line">
-          <h2 id="week-h" class="font-bold text-lg">Next 7 days</h2>
+        <header class="flex flex-wrap items-baseline gap-x-2 gap-y-0.5 px-5 py-4 border-b border-line">
+          <h2 id="week-h" class="font-bold text-lg whitespace-nowrap">Next 7 days</h2>
           <span class="text-xs text-ink-2">Weather checked against your {settings.windLimitMph ?? 15} mph wind limit</span>
         </header>
         {upcoming.length === 0 ? (
@@ -228,7 +242,15 @@ const days = [{ day: today, stops: todayStops }, { day: tomorrow, stops: tomorro
             <a href="/app/marketing" class="btn-ghost mt-3 text-xs min-h-9">Start a campaign</a>
           </div>
         ) : (
-          <div class="overflow-x-auto">
+          <ul class="sm:hidden divide-y divide-line">
+            {upcoming.map((u) => { const d = localDay(u.startsAt, tz); return (
+              <li><a href={`/app/bookings/${u.id}`} class="flex items-center gap-3 px-5 py-3">
+                <span class="min-w-0 flex-1"><span class="block text-sm font-semibold">{dayTitle(d, today)} · {time(u.startsAt, tz)}</span><span class="block text-xs text-ink-2 truncate">#{u.number} {u.name}</span></span>
+                <span class="text-right"><span class="block text-sm font-semibold tabular-nums">{money(u.total)}</span><WeatherBadge risk={wx[d]} compact /></span>
+              </a></li>
+            ); })}
+          </ul>
+          <div class="overflow-x-auto hidden sm:block">
             <table class="table">
               <thead><tr><th scope="col">Day</th><th scope="col">Booking</th><th scope="col" class="hidden sm:table-cell">City</th><th scope="col">Weather</th><th scope="col" class="text-right">Total</th></tr></thead>
               <tbody>
@@ -330,4 +352,5 @@ const days = [{ day: today, stops: todayStops }, { day: tomorrow, stops: tomorro
       </section>
     </aside>
   </div>
+  <SubmitGuard />
 </AppLayout>

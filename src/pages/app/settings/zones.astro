@@ -1,0 +1,120 @@
+---
+/** Settings → Delivery zones CRUD (ZIP lists, radius, fee, minimum). */
+import { and, asc, eq } from 'drizzle-orm';
+import { z } from 'zod';
+import Shell from './_Shell.astro';
+import Help from '../../../components/ops/Help.astro';
+import Err from '../../../components/ops/Err.astro';
+import Empty from '../../../components/ops/Empty.astro';
+import Icon from '../../../components/Icon.astro';
+import { getDb, schema } from '../../../db/client';
+import { formData, str, list, flash, parse, int } from '../../../lib/forms';
+import { money } from '../../../lib/pricing';
+import { opsCtx, centsToInput, isUuid } from '../../../lib/ops/ctx';
+
+const { t, canManage } = opsCtx(Astro);
+const db = await getDb();
+const Z = schema.deliveryZones;
+let errFor = '';
+let errors: Record<string, string> = {};
+let draft: Record<string, string> = {};
+
+const Zone = z.object({
+  name: z.string().min(2, 'Give the zone a name'),
+  zips: z.array(z.string().regex(/^\d{5}$/, 'ZIPs must be 5 digits')).max(400),
+  radius: z.string().refine((x) => x === '' || (Number(x) > 0 && Number(x) <= 200), 'Radius must be 1–200 miles'),
+  fee: z.string().refine((x) => x === '' || Number(x.replace(/[$,]/g, '')) >= 0, 'Enter a dollar amount'),
+  min: z.string().refine((x) => x === '' || Number(x.replace(/[$,]/g, '')) >= 0, 'Enter a dollar amount'),
+}).refine((d) => d.zips.length > 0 || d.radius !== '', { message: 'Add ZIP codes, a radius, or both', path: ['zips'] });
+
+const f = await formData(Astro);
+if (f && canManage) {
+  const action = str(f, '_action', 20);
+  const id = str(f, 'id', 40);
+  if (action === 'delete' && isUuid(id)) {
+    await db.delete(Z).where(and(eq(Z.id, id), eq(Z.tenantId, t.id)));
+    flash(Astro.cookies, 'Zone deleted.');
+    return Astro.redirect('/app/settings/zones', 303);
+  }
+  if (action === 'save' || action === 'add') {
+    draft = { name: str(f, 'name', 80), zips: str(f, 'zips', 4000), radius: str(f, 'radius', 6), fee: str(f, 'fee', 12), min: str(f, 'min', 12), sort: str(f, 'sort', 4) };
+    const zips = [...new Set(list(f, 'zips').flatMap((x) => x.split(/\s+/)).filter(Boolean))];
+    const r = parse(Zone, { ...draft, zips });
+    if (!r.ok) { errFor = action === 'add' ? 'new' : id; errors = r.errors; }
+    else {
+      const toC = (x: string) => Math.round(Number((x || '0').replace(/[$,]/g, '')) * 100);
+      const vals = { name: draft.name, zips, radiusMiles: draft.radius ? Number(draft.radius) : null, feeCents: toC(draft.fee), minOrderCents: toC(draft.min), sort: int(f, 'sort', 0) };
+      if (action === 'add') await db.insert(Z).values({ tenantId: t.id, ...vals });
+      else if (isUuid(id)) await db.update(Z).set(vals).where(and(eq(Z.id, id), eq(Z.tenantId, t.id)));
+      flash(Astro.cookies, action === 'add' ? `Zone “${vals.name}” added — checkout now quotes ${money(vals.feeCents)} delivery there.` : `Zone “${vals.name}” saved.`);
+      return Astro.redirect('/app/settings/zones' + (action === 'add' ? '?added=1' : ''), 303);
+    }
+  }
+}
+
+const zones = await db.select().from(Z).where(eq(Z.tenantId, t.id)).orderBy(asc(Z.sort), asc(Z.feeCents));
+const val = (zid: string, k: string, dflt: string) => (errFor === zid && k in draft ? draft[k] : dflt);
+const inv = (zid: string, k: string) => (errFor === zid && errors[k] ? { 'aria-invalid': 'true' as const, 'aria-describedby': `${zid}-${k}-err` } : {});
+const ro = !canManage;
+---
+<Shell title="Delivery zones" subtitle="Where you deliver, what it costs, and the minimum order." active="zones">
+  <Help benefit="Customers see the exact delivery fee the moment they type their ZIP — no surprise quotes, fewer abandoned carts, and no trips that aren’t worth the drive.">
+    <ul>
+      <li>A ZIP that’s listed in a zone always wins. If no ZIP matches, the <strong>radius</strong> from your depot is used (when the address has map coordinates).</li>
+      <li>When several zones match, the lowest sort order — then the cheapest fee — applies.</li>
+      <li>A zone <strong>minimum</strong> blocks small online orders far away; you can still override it on phone bookings.</li>
+      <li>No zones at all = you deliver everywhere for free. Add at least one to stop out-of-area bookings.</li>
+    </ul>
+  </Help>
+
+  {zones.length === 0 && <div class="mb-6"><Empty icon="map" title="No delivery zones yet" text="Add your home area first (free delivery sells!), then a paid outer ring with a minimum order." /></div>}
+
+  <div class="space-y-4">
+    {zones.map((zn) => (
+      <div class="card p-5">
+      <form method="post" aria-label={`Zone ${zn.name}`}>
+        <input type="hidden" name="_action" value="save" /><input type="hidden" name="id" value={zn.id} />
+        <div class="flex flex-wrap items-center gap-2 mb-3">
+          <span class="grid place-items-center size-8 rounded-lg bg-brand-soft text-brand"><Icon name="map" size={16} /></span>
+          <h2 class="font-bold">{zn.name}</h2>
+          <span class="chip bg-canvas border border-line text-ink-2">{zn.feeCents ? money(zn.feeCents) : 'Free'} delivery</span>
+          {zn.minOrderCents > 0 && <span class="chip bg-canvas border border-line text-ink-2">{money(zn.minOrderCents)} min</span>}
+          <span class="text-xs text-ink-2">{zn.zips.length} ZIPs{zn.radiusMiles ? ` · ${zn.radiusMiles} mi radius` : ''}</span>
+        </div>
+        <div class="grid gap-3 sm:grid-cols-[1fr_110px_110px_110px_80px]">
+          <div><label class="label" for={`n-${zn.id}`}>Name</label><input id={`n-${zn.id}`} name="name" class="input" value={val(zn.id, 'name', zn.name)} disabled={ro} {...inv(zn.id, 'name')} /><Err id={`${zn.id}-name-err`} msg={errFor === zn.id ? errors.name : undefined} /></div>
+          <div><label class="label" for={`r-${zn.id}`}>Radius (mi)</label><input id={`r-${zn.id}`} name="radius" class="input tabular-nums" inputmode="decimal" value={val(zn.id, 'radius', zn.radiusMiles == null ? '' : String(zn.radiusMiles))} disabled={ro} {...inv(zn.id, 'radius')} /><Err id={`${zn.id}-radius-err`} msg={errFor === zn.id ? errors.radius : undefined} /></div>
+          <div><label class="label" for={`f-${zn.id}`}>Fee ($)</label><input id={`f-${zn.id}`} name="fee" class="input tabular-nums" inputmode="decimal" value={val(zn.id, 'fee', centsToInput(zn.feeCents))} disabled={ro} {...inv(zn.id, 'fee')} /><Err id={`${zn.id}-fee-err`} msg={errFor === zn.id ? errors.fee : undefined} /></div>
+          <div><label class="label" for={`m-${zn.id}`}>Minimum ($)</label><input id={`m-${zn.id}`} name="min" class="input tabular-nums" inputmode="decimal" value={val(zn.id, 'min', centsToInput(zn.minOrderCents))} disabled={ro} {...inv(zn.id, 'min')} /><Err id={`${zn.id}-min-err`} msg={errFor === zn.id ? errors.min : undefined} /></div>
+          <div><label class="label" for={`s-${zn.id}`}>Sort</label><input id={`s-${zn.id}`} name="sort" type="number" class="input" value={val(zn.id, 'sort', String(zn.sort))} disabled={ro} /></div>
+        </div>
+        <div class="mt-3"><label class="label" for={`z-${zn.id}`}>ZIP codes <span class="font-normal text-ink-2">(comma, space or line separated)</span></label>
+          <textarea id={`z-${zn.id}`} name="zips" class="input font-mono text-xs" rows="2" disabled={ro} {...inv(zn.id, 'zips')}>{val(zn.id, 'zips', zn.zips.join(', '))}</textarea><Err id={`${zn.id}-zips-err`} msg={errFor === zn.id ? errors.zips : undefined} /></div>
+        {canManage && <div class="flex justify-end mt-3"><button class="btn-primary" data-busy-label="Saving…">Save zone</button></div>}
+      </form>
+      {canManage && (
+        <form method="post" class="-mt-11 w-fit" data-confirm={`Delete the ${zn.name} zone? Customers in these ZIPs will no longer get a delivery quote.`}>
+          <input type="hidden" name="_action" value="delete" /><input type="hidden" name="id" value={zn.id} />
+          <button class="btn-danger">Delete</button>
+        </form>
+      )}
+      </div>
+    ))}
+  </div>
+
+  {canManage && (
+    <form method="post" id="add" class="card p-5 mt-6 border-dashed border-2 border-brand/30 scroll-mt-20">
+      <input type="hidden" name="_action" value="add" />
+      <h2 class="font-bold text-lg flex items-center gap-2"><Icon name="plus" size={18} />Add a zone</h2>
+      <div class="grid gap-3 sm:grid-cols-[1fr_110px_110px_110px_80px] mt-3">
+        <div><label class="label" for="nz-name">Name</label><input id="nz-name" name="name" class="input" placeholder="Outer suburbs" value={val('new', 'name', '')} {...inv('new', 'name')} /><Err id="new-name-err" msg={errFor === 'new' ? errors.name : undefined} /></div>
+        <div><label class="label" for="nz-radius">Radius (mi)</label><input id="nz-radius" name="radius" class="input" inputmode="decimal" value={val('new', 'radius', '')} {...inv('new', 'radius')} /><Err id="new-radius-err" msg={errFor === 'new' ? errors.radius : undefined} /></div>
+        <div><label class="label" for="nz-fee">Fee ($)</label><input id="nz-fee" name="fee" class="input" inputmode="decimal" value={val('new', 'fee', '')} placeholder="35" {...inv('new', 'fee')} /><Err id="new-fee-err" msg={errFor === 'new' ? errors.fee : undefined} /></div>
+        <div><label class="label" for="nz-min">Minimum ($)</label><input id="nz-min" name="min" class="input" inputmode="decimal" value={val('new', 'min', '')} placeholder="150" /></div>
+        <div><label class="label" for="nz-sort">Sort</label><input id="nz-sort" name="sort" type="number" class="input" value={val('new', 'sort', String(zones.length))} /></div>
+      </div>
+      <div class="mt-3"><label class="label" for="nz-zips">ZIP codes</label><textarea id="nz-zips" name="zips" class="input font-mono text-xs" rows="2" placeholder="77494, 77450, 77479" {...inv('new', 'zips')}>{val('new', 'zips', '')}</textarea><Err id="new-zips-err" msg={errFor === 'new' ? errors.zips : undefined} /></div>
+      <div class="flex justify-end mt-3"><button class="btn-primary" data-busy-label="Adding…"><Icon name="plus" size={16} />Add zone</button></div>
+    </form>
+  )}
+</Shell>

@@ -4,7 +4,7 @@
  *  mode "item":   product buy box. Available / last one / booked for the date, delivery fee, add-ons, "Reserve for {date}".
  */
 import { useEffect, useMemo, useRef, useState } from 'preact/hooks';
-import { HOURS, addLines, fetchAvailability, hourLabel, loadCart, money, prettyDay, saveCart, zoneText, type AvailResponse } from './store';
+import { HOURS, addLines, nearbyOpenDates, fetchAvailability, hourLabel, loadCart, money, prettyDay, saveCart, zoneText, type AvailResponse } from './store';
 
 interface Addon { id: string; name: string; priceCents: number; image: string }
 interface Props {
@@ -20,6 +20,8 @@ interface Props {
   item?: { id: string; name: string; priceCents: number; baseHours: number; extraHourCents: number; quantity: number };
   addons?: Addon[];
   depositText?: string;
+  similar?: { id: string; name: string; href: string; priceCents: number; image: string }[];
+  contactHref?: string;
 }
 
 export default function AvailabilityChecker(p: Props) {
@@ -61,6 +63,36 @@ export default function AvailabilityChecker(p: Props) {
     return () => clearTimeout(h);
   }, [day, start, endFixed, zip]);
 
+  const [alts, setAlts] = useState<string[] | null>(null);
+  useEffect(() => {
+    setAlts(null);
+    if (!res || !day) return;
+    const blockedDay = !res.ok || (p.item && (res.items.find((i) => i.id === p.item!.id)?.free ?? 0) === 0);
+    if (!blockedDay) return;
+    let live = true;
+    nearbyOpenDates(p.api, day, start, endFixed, p.minDay, p.maxDay, p.item ? [p.item.id] : []).then((d) => { if (live) setAlts(d); });
+    return () => { live = false; };
+  }, [res]);
+  const altBlock = alts !== null && (
+    <div class="rounded-2xl bg-soft p-3 grid gap-2">
+      {alts.length > 0 ? (
+        <>
+          <p class="text-sm font-extrabold">{p.item ? `${p.item.name} is open on:` : 'Open nearby dates:'}</p>
+          <div class="flex flex-wrap gap-2">{alts.map((d) => <button type="button" class="s-filter !min-h-11 !text-sm" onClick={() => setDay(d)}>{prettyDay(d)}</button>)}</div>
+        </>
+      ) : <p class="text-sm font-bold">No nearby openings online — text us, we often have options.</p>}
+      {p.similar && res?.ok && (() => {
+        const free = p.similar.filter((x) => (res.items.find((i) => i.id === x.id)?.free ?? 0) > 0).slice(0, 3);
+        return free.length ? (
+          <div class="grid gap-1.5">
+            <p class="text-sm font-extrabold mt-1">Similar rentals free {prettyDay(day)}:</p>
+            {free.map((x) => <a href={x.href} class="flex items-center gap-2 rounded-xl bg-white p-1.5 pr-3 min-h-11 hover:underline"><img src={x.image} alt="" width={44} height={33} class="w-11 h-[33px] rounded-md object-cover" /><span class="flex-1 text-sm font-bold">{x.name}</span><span class="s-price text-sm">{money(x.priceCents)}</span></a>)}
+          </div>
+        ) : null;
+      })()}
+      {p.contactHref && <a href={p.contactHref} class="text-sm font-bold underline underline-offset-2">Join the waitlist or request a custom quote →</a>}
+    </div>
+  );
   const zt = res && /^\d{5}$/.test(zip) ? zoneText(res.zone, zip) : null;
   const free = useMemo(() => (p.item && res ? res.items.find((i) => i.id === p.item!.id)?.free ?? 0 : null), [res]);
   const hours = endFixed - start;
@@ -109,6 +141,7 @@ export default function AvailabilityChecker(p: Props) {
           {zt && <span class={`s-chip ${zt.tone === 'ok' ? '' : 's-chip-bad'} whitespace-normal`}>{zt.text}</span>}
         </p>
       )}
+      {!loading && res && !res.ok && altBlock}
     </div>
   );
 
@@ -126,7 +159,7 @@ export default function AvailabilityChecker(p: Props) {
           {endField}
           <button type="submit" class="s-btn s-btn-cta s-btn-lg w-full col-span-2">{p.submitLabel ?? 'See what’s available'}</button>
         </div>
-        <div class="mt-3 min-h-7">{status}</div>
+        <div class="mt-2.5">{status}</div>
       </form>
     );
   }
@@ -162,6 +195,7 @@ export default function AvailabilityChecker(p: Props) {
               : <p class="s-chip s-chip-ok">✓ Available {prettyDay(day)} · {free} left</p>
         )}
         {!loading && zt && <p class={`s-chip ${zt.tone === 'ok' ? '' : 's-chip-bad'} whitespace-normal`}>{zt.text}</p>}
+        {!loading && altBlock}
         {!day && <p class="s-hint">Pick your date to see live availability for {it.name}.</p>}
       </div>
       {!!p.addons?.length && (

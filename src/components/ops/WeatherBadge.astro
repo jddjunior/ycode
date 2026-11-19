@@ -10,6 +10,6 @@ const meta = !risk ? { cls: 'bg-canvas text-ink-2 border border-line', label: 'N
   : { cls: 'bg-green-100 text-green-800', label: 'Clear to bounce', icon: 'check' };
 const detail = risk ? `${Math.round(risk.maxWindMph)} mph wind · gusts ${Math.round(risk.maxGustMph)} · ${risk.precipProb}% rain · ${Math.round(risk.maxTempF)}°F` : 'Forecasts appear up to 16 days out';
 ---
-<span class:list={['chip', meta.cls]} title={risk?.reasons.join('; ') || detail}>
+<span class:list={['chip whitespace-nowrap', meta.cls]} title={risk?.reasons.join('; ') || detail}>
   <Icon name={meta.icon} size={12} />{meta.label}{!compact && risk && <span class="font-normal opacity-80">· {Math.round(risk.maxWindMph)} mph</span>}
 </span>

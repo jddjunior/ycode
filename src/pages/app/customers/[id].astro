@@ -1,10 +1,12 @@
 ---
 /** Customer detail: profile, tags, bookings and message history. */
-import { and, desc, eq, or } from 'drizzle-orm';
+import { and, desc, eq, or, sql } from 'drizzle-orm';
 import AppLayout from '../../../layouts/AppLayout.astro';
 import Icon from '../../../components/Icon.astro';
 import StatusChip from '../../../components/ops/StatusChip.astro';
-import Tabs from './_Tabs.astro';
+import Crumbs from '../../../components/ops/Crumbs.astro';
+import SubmitGuard from '../../../components/ops/SubmitGuard.astro';
+import { STAGE_META } from '../../../lib/ops/ctx';
 import { getDb, schema } from '../../../db/client';
 import { money } from '../../../lib/pricing';
 import { send } from '../../../lib/notify';
@@ -50,6 +52,7 @@ const [bookings, msgs] = await Promise.all([
   db.select().from(schema.bookings).where(and(eq(schema.bookings.tenantId, t.id), eq(schema.bookings.customerId, id))).orderBy(desc(schema.bookings.startsAt)).limit(100),
   db.select().from(schema.messages).where(and(eq(schema.messages.tenantId, t.id), or(eq(schema.messages.customerId, id), eq(schema.messages.to, c.email)))).orderBy(desc(schema.messages.createdAt)).limit(50),
 ]);
+const relatedLeads = c.email ? await db.select().from(schema.leads).where(and(eq(schema.leads.tenantId, t.id), sql`lower(${schema.leads.email}) = lower(${c.email})`)).limit(10) : [];
 const live = bookings.filter((b) => ['pending', 'confirmed', 'completed'].includes(b.status));
 const balance = live.reduce((s, b) => s + Math.max(0, b.totalCents - b.paidCents), 0);
 const bookedTotal = live.reduce((s, b) => s + b.totalCents, 0);
@@ -59,7 +62,7 @@ const bookedTotal = live.reduce((s, b) => s + b.totalCents, 0);
     <a href="/app/customers" class="btn-ghost"><Icon name="arrow" size={16} class="rotate-180" />All customers</a>
     {canManage && <a href={`/app/bookings/new?customerId=${c.id}`} class="btn-ghost"><Icon name="plus" size={16} />Book again</a>}
   </Fragment>
-  <Tabs active="customers" />
+  <Crumbs items={[{ label: 'Customers', href: '/app/customers' }, { label: c.name || c.email }]} />
 
   <section class="grid grid-cols-2 md:grid-cols-4 gap-3 mb-6" aria-label="Customer numbers">
     <div class="kpi"><p class="kpi-label">Lifetime value</p><p class="kpi-value">{money(c.lifetimeValueCents)}</p></div>
@@ -72,7 +75,7 @@ const bookedTotal = live.reduce((s, b) => s + b.totalCents, 0);
     <div class="space-y-6 min-w-0">
       <section class="card overflow-hidden" aria-labelledby="bk-h">
         <header class="px-5 py-4 border-b border-line"><h2 id="bk-h" class="font-bold text-lg">Bookings</h2></header>
-        {bookings.length === 0 ? <p class="px-5 py-6 text-sm text-ink-2">No bookings yet.</p> : (
+        {bookings.length === 0 ? <p class="px-5 py-6 text-sm text-ink-2">No bookings yet. <a href={`/app/bookings/new?customerId=${c.id}`} class="text-brand font-semibold">Create their first booking</a></p> : (
           <ul class="divide-y divide-line">
             {bookings.map((b) => (
               <li><a href={`/app/bookings/${b.id}`} class="flex flex-wrap items-center gap-3 px-5 py-3 hover:bg-canvas">
@@ -87,6 +90,15 @@ const bookedTotal = live.reduce((s, b) => s + b.totalCents, 0);
         )}
       </section>
 
+      {relatedLeads.length > 0 && (
+        <section class="card p-5" aria-labelledby="ld-h">
+          <h2 id="ld-h" class="font-bold text-lg">Leads from this customer</h2>
+          <ul class="mt-2 divide-y divide-line">
+            {relatedLeads.map((l) => <li class="py-2 flex flex-wrap items-center gap-2 text-sm"><span class:list={['chip', STAGE_META[l.stage].cls]}>{STAGE_META[l.stage].label}</span><span>{l.source.replace('_', ' ')}</span>{l.eventDate && <span class="text-ink-2">· event {l.eventDate}</span>}<a href="/app/customers/leads" class="ml-auto text-brand font-semibold">Open pipeline</a></li>)}
+          </ul>
+        </section>
+      )}
+
       <section class="card" aria-labelledby="msg-h">
         <header class="px-5 py-4 border-b border-line"><h2 id="msg-h" class="font-bold text-lg">Messages</h2></header>
         {canManage && (
@@ -97,7 +109,7 @@ const bookedTotal = live.reduce((s, b) => s + b.totalCents, 0);
               <div><label class="label" for="subject">Subject <span class="font-normal text-ink-2">(email)</span></label><input id="subject" name="subject" class="input" maxlength="150" /></div>
             </div>
             <div><label class="label" for="body">Message</label><textarea id="body" name="body" class="input" rows="3" required></textarea></div>
-            <button class="btn-ghost"><Icon name="message" size={16} />Send</button>
+            <button class="btn-ghost" data-busy-label="Sending…"><Icon name="message" size={16} />Send</button>
           </form>
         )}
         {msgs.length === 0 ? <p class="px-5 py-6 text-sm text-ink-2">No messages yet. Receipts, reminders and campaigns show up here.</p> : (
@@ -133,8 +145,9 @@ const bookedTotal = live.reduce((s, b) => s + b.totalCents, 0);
         <label class="flex items-center gap-2 text-sm"><input type="checkbox" name="marketingOptIn" checked={c.marketingOptIn} class="accent-brand size-4" disabled={!canManage} />Email marketing opt-in</label>
         <label class="flex items-center gap-2 text-sm"><input type="checkbox" name="smsOptIn" checked={c.smsOptIn} class="accent-brand size-4" disabled={!canManage} />SMS opt-in</label>
         <div><label class="label" for="cnotes">Notes</label><textarea id="cnotes" name="notes" class="input" rows="3" disabled={!canManage}>{c.notes}</textarea></div>
-        {canManage && <button class="btn-primary w-full">Save customer</button>}
+        {canManage && <button class="btn-primary w-full" data-busy-label="Saving…">Save customer</button>}
       </form>
     </aside>
   </div>
+  <SubmitGuard />
 </AppLayout>

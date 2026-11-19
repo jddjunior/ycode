@@ -12,9 +12,9 @@ import { apiError, json, publicTenant, readJson, zLines, zodError } from '../../
 import { readAttribution } from '../../../../lib/site/attribution';
 
 const Body = z.object({
-  leadId: z.string().uuid().optional().nullable(),
+  leadId: z.uuid().optional().nullable(),
   name: z.string().trim().max(120).default(''),
-  email: z.union([z.string().trim().email('Enter a valid email').max(200), z.literal('')]).default(''),
+  email: z.union([z.email('Enter a valid email').max(200), z.literal('')]).default(''),
   phone: z.string().trim().max(40).default(''),
   eventDate: z.union([z.string().regex(/^\d{4}-\d{2}-\d{2}$/), z.literal('')]).optional().nullable(),
   zip: z.string().trim().max(10).default(''),

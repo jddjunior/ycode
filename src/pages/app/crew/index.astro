@@ -8,9 +8,10 @@ import { and, eq } from 'drizzle-orm';
 import CrewLayout from '../../../layouts/CrewLayout.astro';
 import Icon from '../../../components/Icon.astro';
 import WeatherBadge from '../../../components/ops/WeatherBadge.astro';
+import SubmitGuard from '../../../components/ops/SubmitGuard.astro';
 import { getDb, schema } from '../../../db/client';
 import { formData, str, flash } from '../../../lib/forms';
-import { opsCtx, pickDay, dayTitle, shortDay, addDays, time, isUuid, fullAddress, mapsLink } from '../../../lib/ops/ctx';
+import { opsCtx, pickDay, shortDay, addDays, time, isUuid, fullAddress, mapsLink } from '../../../lib/ops/ctx';
 import { stopsForDay, routeStops, weatherFor, CHECKLIST } from '../../../lib/ops/stops';
 import { logActivity } from '../../../lib/ops/stats';
 
@@ -176,4 +177,14 @@ const nextStop = route.ordered.find((x) => !x.done);
       })}
     </ol>
   )}
+  <details class="mt-6 card p-4 text-sm">
+    <summary class="font-semibold cursor-pointer">Safety tips & how this works</summary>
+    <ul class="mt-2 list-disc pl-5 space-y-1 text-ink-2">
+      <li>Tap each checklist item as you go — the office sees your progress live.</li>
+      <li>Anchor every stake or sandbag point. No exceptions on concrete.</li>
+      <li>If wind picks up past {settings.windLimitMph ?? 15} mph: clear riders, unplug the blower, call the office.</li>
+      <li>After pickup, tap <strong>Log cleaning</strong> once the unit is wiped and dry — it counts toward your safety records.</li>
+    </ul>
+  </details>
+  <SubmitGuard />
 </CrewLayout>

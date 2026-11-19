@@ -1,0 +1,155 @@
+---
+/** Settings → Booking rules: deposits, tax, waiver, timing, capacity, wind limit, surfaces, policy, agreement. */
+import { z } from 'zod';
+import Shell from './_Shell.astro';
+import Help from '../../../components/ops/Help.astro';
+import Err from '../../../components/ops/Err.astro';
+import Icon from '../../../components/Icon.astro';
+import { formData, str, flash, parse, bool } from '../../../lib/forms';
+import { miniMarkdown, slugify } from '../../../lib/util';
+import { money } from '../../../lib/pricing';
+import { opsCtx, centsToInput, type OpsSettings } from '../../../lib/ops/ctx';
+import { patchSettings } from '../../../lib/ops/settings';
+
+const { t, settings: s, canManage } = opsCtx(Astro);
+let errors: Record<string, string> = {};
+const num = (v: unknown) => { const n = Number(String(v ?? '').replace(/[$,%\s]/g, '')); return Number.isFinite(n) ? n : NaN; };
+let v = {
+  depositType: s.depositType ?? 'percent',
+  depositValue: s.depositType === 'fixed' ? centsToInput(s.depositValue ?? 5000) : String(s.depositValue ?? 25),
+  taxRate: ((s.taxRateBps ?? 0) / 100).toString(), damageWaiver: ((s.damageWaiverBps ?? 0) / 100).toString(),
+  damageWaiverDefaultOn: s.damageWaiverDefaultOn ?? false, passFee: s.passPlatformFeeToCustomer ?? false,
+  minOrder: centsToInput(s.minOrderCents ?? 0), leadTimeHours: String(s.leadTimeHours ?? 24), maxDaysAhead: String(s.maxDaysAhead ?? 365),
+  holdMinutes: String(s.holdMinutes ?? 30), maxEventsPerDay: String(s.maxEventsPerDay ?? 0), defaultStartHour: String(s.defaultStartHour ?? 10), defaultEndHour: String(s.defaultEndHour ?? 18),
+  windLimitMph: String(s.windLimitMph ?? 15), cancellationPolicy: s.cancellationPolicy ?? '', rentalAgreement: s.rentalAgreement ?? '', googleReviewUrl: s.googleReviewUrl ?? '',
+  monthlyGoal: centsToInput(s.monthlyGoalCents ?? null),
+  surfaces: (s.surfaces ?? []).map((x) => ({ key: x.key, label: x.label, fee: centsToInput(x.feeCents) })),
+};
+
+const f = await formData(Astro);
+if (f && canManage) {
+  const labels = f.getAll('surfaceLabel').map(String), fees = f.getAll('surfaceFee').map(String), keys = f.getAll('surfaceKey').map(String);
+  v = {
+    depositType: (['percent', 'fixed', 'full'] as const).find((x) => x === str(f, 'depositType', 10)) ?? 'percent',
+    depositValue: str(f, 'depositValue', 12), taxRate: str(f, 'taxRate', 10), damageWaiver: str(f, 'damageWaiver', 10),
+    damageWaiverDefaultOn: bool(f, 'damageWaiverDefaultOn'), passFee: bool(f, 'passFee'), minOrder: str(f, 'minOrder', 12),
+    leadTimeHours: str(f, 'leadTimeHours', 6), maxDaysAhead: str(f, 'maxDaysAhead', 6), holdMinutes: str(f, 'holdMinutes', 6), maxEventsPerDay: str(f, 'maxEventsPerDay', 6),
+    defaultStartHour: str(f, 'defaultStartHour', 3), defaultEndHour: str(f, 'defaultEndHour', 3), windLimitMph: str(f, 'windLimitMph', 4),
+    cancellationPolicy: str(f, 'cancellationPolicy', 2000), rentalAgreement: str(f, 'rentalAgreement', 20000), googleReviewUrl: str(f, 'googleReviewUrl', 500), monthlyGoal: str(f, 'monthlyGoal', 12),
+    surfaces: labels.map((label, i) => ({ key: keys[i] || slugify(label, 30), label: label.trim().slice(0, 60), fee: fees[i] ?? '' })).filter((x) => x.label),
+  };
+  const range = (lo: number, hi: number, msg: string) => z.string().refine((x) => { const n = num(x); return Number.isFinite(n) && n >= lo && n <= hi; }, msg);
+  const r = parse(z.object({
+    depositValue: v.depositType === 'full' ? z.string() : v.depositType === 'percent' ? range(0, 100, 'Deposit percent must be 0–100') : range(0, 100000, 'Enter a dollar amount'),
+    taxRate: range(0, 20, 'Tax rate must be 0–20%'), damageWaiver: range(0, 30, 'Waiver must be 0–30%'), minOrder: range(0, 100000, 'Enter a dollar amount'),
+    leadTimeHours: range(0, 720, '0–720 hours'), maxDaysAhead: range(1, 1095, '1–1095 days'), holdMinutes: range(5, 240, '5–240 minutes'), maxEventsPerDay: range(0, 500, '0 = unlimited'),
+    defaultStartHour: range(0, 23, '0–23'), defaultEndHour: range(1, 24, '1–24'), windLimitMph: range(5, 40, 'Most manufacturers say 15–20 mph'),
+    googleReviewUrl: z.union([z.literal(''), z.url('Enter a full https:// link')]),
+    monthlyGoal: z.union([z.literal(''), range(0, 10_000_000, 'Enter a dollar amount')]),
+  }), v);
+  if (!r.ok) errors = r.errors;
+  else if (num(v.defaultEndHour) <= num(v.defaultStartHour)) errors = { defaultEndHour: 'End must be after start' };
+  else {
+    const toCents = (x: string) => Math.round(num(x || '0') * 100);
+    const patch: Partial<OpsSettings> = {
+      depositType: v.depositType, depositValue: v.depositType === 'fixed' ? toCents(v.depositValue) : v.depositType === 'percent' ? Math.round(num(v.depositValue)) : 100,
+      taxRateBps: Math.round(num(v.taxRate) * 100), damageWaiverBps: Math.round(num(v.damageWaiver) * 100), damageWaiverDefaultOn: v.damageWaiverDefaultOn,
+      passPlatformFeeToCustomer: v.passFee, minOrderCents: toCents(v.minOrder), leadTimeHours: Math.round(num(v.leadTimeHours)), maxDaysAhead: Math.round(num(v.maxDaysAhead)),
+      holdMinutes: Math.round(num(v.holdMinutes)), maxEventsPerDay: Math.round(num(v.maxEventsPerDay)), defaultStartHour: Math.round(num(v.defaultStartHour)), defaultEndHour: Math.round(num(v.defaultEndHour)),
+      windLimitMph: Math.round(num(v.windLimitMph)), cancellationPolicy: v.cancellationPolicy, rentalAgreement: v.rentalAgreement, googleReviewUrl: v.googleReviewUrl || undefined,
+      surfaces: v.surfaces.slice(0, 12).map((x) => ({ key: x.key.replace(/[^a-z0-9-]/g, '').slice(0, 30) || slugify(x.label, 30), label: x.label, feeCents: toCents(x.fee) })),
+      ...(v.monthlyGoal ? { monthlyGoalCents: toCents(v.monthlyGoal) } : {}),
+    };
+    await patchSettings(t.id, s, patch);
+    flash(Astro.cookies, 'Booking rules saved. New quotes and online checkout use them immediately.');
+    return Astro.redirect('/app/settings/booking', 303);
+  }
+}
+const ro = !canManage;
+const inv = (k: string) => (errors[k] ? { 'aria-invalid': 'true' as const, 'aria-describedby': `${k}-err` } : {});
+const sample = 30000;
+const depPreview = v.depositType === 'full' ? sample : v.depositType === 'fixed' ? Math.min(sample, Math.round(num(v.depositValue) * 100) || 0) : Math.round(sample * (num(v.depositValue) || 0) / 100);
+const hours = Array.from({ length: 25 }, (_, h) => h);
+const hl = (h: number) => (h === 0 || h === 24 ? '12 AM' : h === 12 ? '12 PM' : h < 12 ? `${h} AM` : `${h - 12} PM`);
+---
+<Shell title="Booking rules" subtitle="How online checkout prices, holds and protects your dates." active="booking">
+  <Help benefit="Set it once and every quote — online or by phone — is priced and protected the same way, so you stop doing math on the phone and never double-book.">
+    <ul>
+      <li><strong>Deposit</strong>: percent of the order, a fixed dollar amount, or full payment up front. The BounceOS platform fee is always covered by the first payment.</li>
+      <li><strong>Hold minutes</strong>: how long a cart reserves inventory while the customer pays. Short holds stop people from “parking” your best dates.</li>
+      <li><strong>Max events per day</strong> is your truck/crew capacity — once full, the day closes online. 0 means unlimited.</li>
+      <li><strong>Wind limit</strong> drives the STOP flags on your Game Plan, Deliveries and Crew app.</li>
+    </ul>
+  </Help>
+  {Object.keys(errors).length > 0 && <p role="alert" class="mb-4 rounded-xl bg-red-50 border border-red-200 text-red-800 text-sm px-4 py-3">Please fix the highlighted fields — nothing was saved yet.</p>}
+  <form method="post" class="space-y-6" novalidate>
+    <section class="card p-5" aria-labelledby="money-h">
+      <h2 id="money-h" class="font-bold text-lg">Money</h2>
+      <fieldset class="mt-3">
+        <legend class="label">Deposit type</legend>
+        <div class="grid grid-cols-3 gap-2 text-sm">
+          {[['percent', 'Percent'], ['fixed', 'Fixed $'], ['full', 'Pay in full']].map(([k, l]) => (
+            <label class="flex items-center justify-center rounded-xl border border-line min-h-11 font-semibold cursor-pointer has-[:checked]:border-brand has-[:checked]:bg-brand-soft has-[:checked]:text-brand"><input type="radio" name="depositType" value={k} checked={v.depositType === k} class="sr-only" disabled={ro} />{l}</label>
+          ))}
+        </div>
+      </fieldset>
+      <div class="grid gap-3 grid-cols-2 sm:grid-cols-4 mt-3">
+        <div><label class="label" for="depositValue">Deposit amount</label><input id="depositValue" name="depositValue" class="input tabular-nums" inputmode="decimal" value={v.depositValue} disabled={ro} {...inv('depositValue')} /><Err id="depositValue-err" msg={errors.depositValue} /><p class="hint">% for Percent, $ for Fixed, ignored for Pay in full. Now: {money(depPreview)} on a {money(sample)} order.</p></div>
+        <div><label class="label" for="taxRate">Sales tax (%)</label><input id="taxRate" name="taxRate" class="input tabular-nums" inputmode="decimal" value={v.taxRate} disabled={ro} {...inv('taxRate')} /><Err id="taxRate-err" msg={errors.taxRate} /><p class="hint">Applied to rentals, waiver & surface fees — not delivery.</p></div>
+        <div><label class="label" for="damageWaiver">Damage waiver (%)</label><input id="damageWaiver" name="damageWaiver" class="input tabular-nums" inputmode="decimal" value={v.damageWaiver} disabled={ro} {...inv('damageWaiver')} /><Err id="damageWaiver-err" msg={errors.damageWaiver} /><p class="hint">0 hides the option.</p></div>
+        <div><label class="label" for="minOrder">Minimum order ($)</label><input id="minOrder" name="minOrder" class="input tabular-nums" inputmode="decimal" value={v.minOrder} disabled={ro} {...inv('minOrder')} /><Err id="minOrder-err" msg={errors.minOrder} /><p class="hint">Zones can set their own minimum.</p></div>
+      </div>
+      <div class="mt-3 space-y-2">
+        <label class="flex items-center gap-2 text-sm"><input type="checkbox" name="damageWaiverDefaultOn" checked={v.damageWaiverDefaultOn} class="accent-brand size-4" disabled={ro} />Pre-check the damage waiver at checkout</label>
+        <label class="flex items-center gap-2 text-sm"><input type="checkbox" name="passFee" checked={v.passFee} class="accent-brand size-4" disabled={ro} />Pass the BounceOS platform fee to customers as a “service fee”</label>
+      </div>
+    </section>
+
+    <section class="card p-5" aria-labelledby="time-h">
+      <h2 id="time-h" class="font-bold text-lg">Timing & capacity</h2>
+      <div class="grid gap-3 grid-cols-2 sm:grid-cols-3 mt-3">
+        <div><label class="label" for="leadTimeHours">Lead time (hours)</label><input id="leadTimeHours" name="leadTimeHours" type="number" min="0" class="input" value={v.leadTimeHours} disabled={ro} {...inv('leadTimeHours')} /><Err id="leadTimeHours-err" msg={errors.leadTimeHours} /><p class="hint">Minimum notice for online bookings.</p></div>
+        <div><label class="label" for="maxDaysAhead">Book up to (days ahead)</label><input id="maxDaysAhead" name="maxDaysAhead" type="number" min="1" class="input" value={v.maxDaysAhead} disabled={ro} {...inv('maxDaysAhead')} /><Err id="maxDaysAhead-err" msg={errors.maxDaysAhead} /></div>
+        <div><label class="label" for="holdMinutes">Cart hold (minutes)</label><input id="holdMinutes" name="holdMinutes" type="number" min="5" class="input" value={v.holdMinutes} disabled={ro} {...inv('holdMinutes')} /><Err id="holdMinutes-err" msg={errors.holdMinutes} /></div>
+        <div><label class="label" for="maxEventsPerDay">Max events per day</label><input id="maxEventsPerDay" name="maxEventsPerDay" type="number" min="0" class="input" value={v.maxEventsPerDay} disabled={ro} {...inv('maxEventsPerDay')} /><Err id="maxEventsPerDay-err" msg={errors.maxEventsPerDay} /><p class="hint">Truck & crew capacity. 0 = unlimited.</p></div>
+        <div><label class="label" for="defaultStartHour">Default start</label><select id="defaultStartHour" name="defaultStartHour" class="input" disabled={ro}>{hours.slice(0, 24).map((h) => <option value={h} selected={String(h) === v.defaultStartHour}>{hl(h)}</option>)}</select></div>
+        <div><label class="label" for="defaultEndHour">Default end</label><select id="defaultEndHour" name="defaultEndHour" class="input" disabled={ro} {...inv('defaultEndHour')}>{hours.slice(1).map((h) => <option value={h} selected={String(h) === v.defaultEndHour}>{hl(h)}</option>)}</select><Err id="defaultEndHour-err" msg={errors.defaultEndHour} /></div>
+      </div>
+    </section>
+
+    <section class="card p-5" aria-labelledby="safe-h">
+      <h2 id="safe-h" class="font-bold text-lg">Safety & surfaces</h2>
+      <div class="grid gap-3 sm:grid-cols-[200px_1fr] mt-3 items-start">
+        <div><label class="label" for="windLimitMph">Wind limit (mph)</label><input id="windLimitMph" name="windLimitMph" type="number" min="5" max="40" class="input" value={v.windLimitMph} disabled={ro} {...inv('windLimitMph')} /><Err id="windLimitMph-err" msg={errors.windLimitMph} /></div>
+        <p class="hint sm:mt-8">Sustained wind at or above this (or gusts 10 mph over) flags the day <strong class="text-red-700">STOP</strong>; within 5 mph flags <strong class="text-amber-800">Watch</strong>. Most manufacturers and ASTM F2374 guidance say 15–20 mph.</p>
+      </div>
+      <fieldset class="mt-4">
+        <legend class="label">Setup surfaces & fees</legend>
+        <p class="hint !mt-0 mb-2">Customers pick a surface at checkout; fees cover sandbags, tarps or indoor mats. Clear a label to remove it.</p>
+        <ul class="space-y-2">
+          {[...v.surfaces, { key: '', label: '', fee: '' }].map((x, i) => (
+            <li class="grid grid-cols-[1fr_110px] gap-2">
+              <input type="hidden" name="surfaceKey" value={x.key} />
+              <div><label class="sr-only" for={`sl-${i}`}>Surface {i + 1} label</label><input id={`sl-${i}`} name="surfaceLabel" class="input" value={x.label} placeholder={x.key ? '' : 'Add a surface, e.g. Turf'} disabled={ro} /></div>
+              <div><label class="sr-only" for={`sf-${i}`}>Surface {i + 1} fee in dollars</label><input id={`sf-${i}`} name="surfaceFee" class="input tabular-nums" inputmode="decimal" value={x.fee} placeholder="$0" disabled={ro} /></div>
+            </li>
+          ))}
+        </ul>
+      </fieldset>
+    </section>
+
+    <section class="card p-5" aria-labelledby="pol-h">
+      <h2 id="pol-h" class="font-bold text-lg">Policies & agreement</h2>
+      <div class="mt-3"><label class="label" for="cancellationPolicy">Cancellation policy</label><textarea id="cancellationPolicy" name="cancellationPolicy" class="input" rows="2" disabled={ro}>{v.cancellationPolicy}</textarea></div>
+      <div class="grid gap-4 lg:grid-cols-2 mt-3">
+        <div><label class="label" for="rentalAgreement">Rental agreement (Markdown)</label><textarea id="rentalAgreement" name="rentalAgreement" class="input font-mono text-xs" rows="14" disabled={ro}>{v.rentalAgreement}</textarea><p class="hint">Customers e-sign this at checkout; each signature stores a fingerprint of the exact text.</p></div>
+        <div><p class="label">Preview</p><div class="rounded-xl border border-line bg-canvas/50 p-4 max-h-80 overflow-y-auto prose-app" set:html={miniMarkdown(v.rentalAgreement || '_No agreement yet._')} /></div>
+      </div>
+      <div class="grid gap-3 sm:grid-cols-2 mt-3">
+        <div><label class="label" for="googleReviewUrl">Google review link</label><input id="googleReviewUrl" name="googleReviewUrl" class="input" value={v.googleReviewUrl} placeholder="https://g.page/r/…" disabled={ro} {...inv('googleReviewUrl')} /><Err id="googleReviewUrl-err" msg={errors.googleReviewUrl} /><p class="hint">Used in post-party review requests.</p></div>
+        <div><label class="label" for="monthlyGoal">Monthly revenue goal ($)</label><input id="monthlyGoal" name="monthlyGoal" class="input tabular-nums" inputmode="decimal" value={v.monthlyGoal} placeholder="Auto" disabled={ro} {...inv('monthlyGoal')} /><Err id="monthlyGoal-err" msg={errors.monthlyGoal} /><p class="hint">Shown as the progress bar on your Game Plan.</p></div>
+      </div>
+    </section>
+    {canManage && <div class="flex justify-end sticky bottom-4"><button class="btn-primary shadow-lg" data-busy-label="Saving…"><Icon name="check" size={16} />Save booking rules</button></div>}
+  </form>
+</Shell>

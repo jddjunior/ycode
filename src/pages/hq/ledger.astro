@@ -1,0 +1,121 @@
+---
+import { and, desc, eq, gte, inArray, sql, type SQL } from 'drizzle-orm';
+import { alias } from 'drizzle-orm/pg-core';
+import { z } from 'zod';
+import Shell from './_Shell.astro';
+import { getDb, schema } from '../../db/client';
+import { formData, str, flash } from '../../lib/forms';
+import { ledgerSummary } from '../../lib/revenue';
+import { money } from '../../lib/pricing';
+import { formatLocal } from '../../lib/time';
+
+const R = schema.revenueEvents;
+const KINDS = ['platform_fee', 'subscription', 'referral_commission', 'marketplace_lead_fee', 'partner_referral', 'ads_management_fee'] as const;
+const PAYOUT = ['referral_commission', 'partner_referral'] as const;
+const STATUSES = ['accrued', 'payable', 'paid', 'void'] as const;
+const LABEL: Record<string, string> = { platform_fee: 'Platform fee', subscription: 'Subscription', referral_commission: 'Referral commission', marketplace_lead_fee: 'Marketplace fee', partner_referral: 'Partner share', ads_management_fee: 'Managed ads fee' };
+// Allowed payout transitions: accrued → payable → paid; accrued/payable → void.
+const NEXT: Record<string, (typeof STATUSES)[number][]> = { accrued: ['payable', 'void'], payable: ['paid', 'void'], paid: [], void: [] };
+
+const f = await formData(Astro);
+if (f) {
+  const db = await getDb();
+  const to = STATUSES.find((s) => s === str(f, 'to', 10));
+  const ids = f.getAll('id').map(String).filter((x) => z.uuid().safeParse(x).success).slice(0, 500);
+  if (!to || !ids.length) { flash(Astro.cookies, 'Select at least one payout and an action.', 'error'); return Astro.redirect('/hq/ledger' + Astro.url.search, 303); }
+  const from = Object.entries(NEXT).filter(([, n]) => n.includes(to)).map(([k]) => k) as (typeof STATUSES)[number][];
+  const done = await db.update(R).set({ status: to, memo: sql`${R.memo} || ${` · ${to} ${new Date().toISOString().slice(0, 10)} by ${Astro.locals.session?.user.email ?? 'hq'}`}` })
+    .where(and(inArray(R.id, ids), inArray(R.kind, [...PAYOUT]), inArray(R.status, from))).returning({ id: R.id });
+  flash(Astro.cookies, `${done.length} payout${done.length === 1 ? '' : 's'} marked ${to}${done.length < ids.length ? ` (${ids.length - done.length} skipped — not a payout or wrong status)` : ''}.`, done.length ? 'ok' : 'error');
+  return Astro.redirect('/hq/ledger' + Astro.url.search, 303);
+}
+
+const sp = Astro.url.searchParams;
+const kindParam = sp.get('kind') ?? '';
+const kindF = kindParam === 'payouts' ? [...PAYOUT] : KINDS.filter((k) => k === kindParam);
+const statusF = STATUSES.find((s) => s === sp.get('status'));
+const days = [7, 30, 90, 365, 3650].find((d) => d === Number(sp.get('days'))) ?? 90;
+const conds: SQL[] = [gte(R.createdAt, new Date(Date.now() - days * 86_400_000))];
+if (kindF.length) conds.push(inArray(R.kind, kindF));
+if (statusF) conds.push(eq(R.status, statusF));
+
+const db = await getDb();
+const payer = alias(schema.tenants, 'payer'), ben = alias(schema.tenants, 'ben');
+const events = await db.select({ e: R, payer: payer.name, ben: ben.name }).from(R)
+  .leftJoin(payer, eq(payer.id, R.tenantId)).leftJoin(ben, eq(ben.id, R.beneficiaryTenantId))
+  .where(and(...conds)).orderBy(desc(R.createdAt)).limit(300);
+const summary = await ledgerSummary(days);
+const [owed] = await db.select({ accrued: sql<number>`coalesce(sum(${R.amountCents}) filter (where ${R.status} = 'accrued'),0)::int`, payable: sql<number>`coalesce(sum(${R.amountCents}) filter (where ${R.status} = 'payable'),0)::int`, paid: sql<number>`coalesce(sum(${R.amountCents}) filter (where ${R.status} = 'paid'),0)::int` })
+  .from(R).where(inArray(R.kind, [...PAYOUT]));
+const qs = (patch: Record<string, string>) => { const u = new URLSearchParams(sp); for (const [k, v] of Object.entries(patch)) v ? u.set(k, v) : u.delete(k); return `?${u}`; };
+const ST: Record<string, string> = { accrued: 'bg-canvas text-ink-2', payable: 'bg-sun/30 text-[#7A5200]', paid: 'bg-green-50 text-green-800', void: 'bg-red-50 text-red-800' };
+const isPayout = (k: string) => (PAYOUT as readonly string[]).includes(k);
+---
+<Shell title="Revenue-share ledger" active="ledger" subtitle="Immutable record of every fee Branch Avenue earns and every share owed to operators.">
+  <div class="grid gap-3 grid-cols-2 lg:grid-cols-6 mb-6">
+    {KINDS.map((k) => { const s = summary.find((x) => x.kind === k); return (
+      <a href={qs({ kind: k })} class:list={['kpi hover:border-brand', kindParam === k && 'ring-2 ring-brand']}><p class="kpi-label">{LABEL[k]}</p><p class:list={['kpi-value text-xl', isPayout(k) && 'text-warn']}>{money(s?.total ?? 0)}</p><p class="hint">{s?.n ?? 0} events · {days}d</p></a>
+    ); })}
+  </div>
+
+  <div class="card p-4 mb-6 flex flex-wrap items-center gap-4">
+    <div><p class="kpi-label">Operator payouts</p><p class="text-sm mt-1"><strong>{money(owed.accrued)}</strong> accrued · <strong class="text-[#7A5200]">{money(owed.payable)}</strong> payable · <strong class="text-mint">{money(owed.paid)}</strong> paid</p></div>
+    <div class="ml-auto flex flex-wrap gap-2">
+      <a class="btn-ghost min-h-9 text-xs" href={qs({ kind: 'payouts', status: 'accrued' })}>Review accrued payouts</a>
+      <a class="btn-ghost min-h-9 text-xs" href={qs({ kind: 'payouts', status: 'payable' })}>Ready to pay</a>
+    </div>
+  </div>
+
+  <form method="get" class="flex flex-wrap gap-2 mb-3">
+    <label class="sr-only" for="kind">Kind</label>
+    <select class="input w-auto bg-white" id="kind" name="kind"><option value="">All kinds</option><option value="payouts" selected={kindParam === 'payouts'}>Operator payouts</option>{KINDS.map((k) => <option value={k} selected={kindParam === k}>{LABEL[k]}</option>)}</select>
+    <label class="sr-only" for="status">Status</label>
+    <select class="input w-auto bg-white" id="status" name="status"><option value="">All statuses</option>{STATUSES.map((s) => <option value={s} selected={statusF === s}>{s}</option>)}</select>
+    <label class="sr-only" for="days">Period</label>
+    <select class="input w-auto bg-white" id="days" name="days">{[[7, '7 days'], [30, '30 days'], [90, '90 days'], [365, '12 months'], [3650, 'All time']].map(([d, l]) => <option value={d} selected={days === d}>{l}</option>)}</select>
+    <button class="btn-ghost">Apply</button>
+    {(kindParam || statusF) && <a class="btn-ghost" href="/hq/ledger">Clear</a>}
+  </form>
+
+  <form method="post" class="card overflow-hidden" data-confirm="Update the selected payouts?">
+    <div class="flex flex-wrap items-center gap-2 px-4 py-3 border-b border-line bg-canvas/60">
+      <p class="text-sm font-semibold">{events.length} event{events.length === 1 ? '' : 's'}</p>
+      <span class="text-xs text-ink-2">Select referral commissions / partner shares to move them through payout.</span>
+      <div class="ml-auto flex gap-2">
+        <button class="btn-ghost min-h-9 px-3 text-xs" name="to" value="payable">Mark payable</button>
+        <button class="btn-primary min-h-9 px-3 text-xs" name="to" value="paid">Mark paid</button>
+        <button class="btn-danger min-h-9 px-3 text-xs" name="to" value="void">Void</button>
+      </div>
+    </div>
+    {events.length === 0 ? <p class="p-6 text-sm text-ink-2">No events match these filters.</p> : <>
+      <ul class="md:hidden divide-y divide-line">
+        {events.map(({ e, payer, ben }) => (
+          <li class="p-4 flex gap-3">
+            {isPayout(e.kind) && NEXT[e.status].length > 0 ? <input type="checkbox" name="id" value={e.id} class="mt-1 size-5 accent-[var(--color-brand)]" aria-label={`Select ${LABEL[e.kind]} ${money(e.amountCents)}`} /> : <span class="size-5"></span>}
+            <div class="min-w-0 flex-1"><p class="font-semibold">{LABEL[e.kind]} <span class="tabular-nums">{money(e.amountCents)}</span></p><p class="text-xs text-ink-2">{payer ?? '—'}{ben ? ` → ${ben}` : ' → Branch Avenue'} · {formatLocal(e.createdAt, 'UTC', { month: 'short', day: 'numeric' })}</p></div>
+            <span class:list={['chip h-fit', ST[e.status]]}>{e.status}</span>
+          </li>
+        ))}
+      </ul>
+      <div class="overflow-x-auto hidden md:block">
+        <table class="table min-w-[900px]">
+          <thead><tr><th class="w-8"><span class="sr-only">Select</span></th><th>Date</th><th>Kind</th><th>Paid by</th><th>Beneficiary</th><th>Memo</th><th class="text-right">Amount</th><th>Status</th></tr></thead>
+          <tbody>
+            {events.map(({ e, payer, ben }) => (
+              <tr>
+                <td>{isPayout(e.kind) && NEXT[e.status].length > 0 && <input type="checkbox" name="id" value={e.id} class="size-4 accent-[var(--color-brand)]" aria-label={`Select ${LABEL[e.kind]} ${money(e.amountCents)}`} />}</td>
+                <td class="whitespace-nowrap">{formatLocal(e.createdAt, 'UTC', { month: 'short', day: 'numeric', year: 'numeric' })}</td>
+                <td>{LABEL[e.kind]}</td>
+                <td class="max-w-44 truncate">{payer ?? '—'}</td>
+                <td class="max-w-44 truncate">{ben ?? <span class="text-ink-2">Branch Avenue</span>}</td>
+                <td class="max-w-64 truncate text-xs text-ink-2" title={e.memo}>{e.memo}</td>
+                <td class="text-right tabular-nums font-semibold">{money(e.amountCents)}</td>
+                <td><span class:list={['chip', ST[e.status]]}>{e.status}</span></td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+    </>}
+  </form>
+</Shell>

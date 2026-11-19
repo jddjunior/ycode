@@ -9,7 +9,7 @@ import { BLOCK_DEFS, LIMITS, type FieldDef } from './blockdefs';
 
 const IMG = /^(\/[\w\-./%]*|https:\/\/[^\s"'<>]+)$/;
 
-function fieldSchema(f: FieldDef): z.ZodTypeAny {
+function fieldSchema(f: FieldDef): z.ZodType {
   switch (f.kind) {
     case 'text':
     case 'textarea': {
@@ -21,15 +21,15 @@ function fieldSchema(f: FieldDef): z.ZodTypeAny {
     case 'number': return z.number().int().min(f.min ?? 0).max(f.max ?? 100).default(f.min ?? 0);
     case 'lines': return z.array(z.string().trim().min(1).max(LIMITS.short)).max(f.max ?? LIMITS.listItems).default([]);
     case 'repeater': {
-      const shape: Record<string, z.ZodTypeAny> = {};
+      const shape: Record<string, z.ZodType> = {};
       for (const sf of f.fields ?? []) shape[sf.key] = fieldSchema(sf);
       return z.array(z.object(shape)).max(f.max ?? LIMITS.listItems).default([]);
     }
   }
 }
 
-const PROPS: Record<string, z.ZodTypeAny> = Object.fromEntries(BLOCK_DEFS.map((d) => {
-  const shape: Record<string, z.ZodTypeAny> = {};
+const PROPS: Record<string, z.ZodType> = Object.fromEntries(BLOCK_DEFS.map((d) => {
+  const shape: Record<string, z.ZodType> = {};
   for (const f of d.fields) shape[f.key] = fieldSchema(f);
   return [d.type, z.object(shape)];
 }));

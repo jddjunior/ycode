@@ -4,7 +4,7 @@
  * Prices always come from the server quote; the client only shows list prices before one arrives.
  */
 import { useEffect, useMemo, useRef, useState } from 'preact/hooks';
-import { HOURS, fetchAvailability, hourLabel, loadCart, money, prettyDay, saveCart, zoneText, type AvailResponse, type CartLine, type CartState } from './store';
+import { HOURS, nearbyOpenDates, fetchAvailability, hourLabel, loadCart, money, prettyDay, saveCart, zoneText, type AvailResponse, type CartLine, type CartState } from './store';
 
 export interface CatalogItem {
   id: string; slug: string; name: string; kind: 'rental' | 'addon' | 'package'; priceCents: number; baseHours: number; extraHourCents: number;
@@ -69,7 +69,13 @@ export default function Checkout(p: Props) {
     setLeadId(c.leadId ?? null);
     setHoldToken(c.holdToken ?? null);
     if (c.contact) setF((x) => ({ ...x, name: c.contact?.name ?? '', email: c.contact?.email ?? '', phone: c.contact?.phone ?? '' }));
-    if (c.day && c.zip && c.lines.length) setStep(1);
+    let resumed = false;
+    try {
+      const saved = JSON.parse(sessionStorage.getItem(`bos:co:${p.slug}`) ?? 'null');
+      if (saved?.f) setF((x) => ({ ...x, ...saved.f, signName: '', accepted: false }));
+      if (saved?.step > 1 && c.lines.length) { setStep(Math.min(saved.step, 4)); resumed = true; }
+    } catch { /* ignore */ }
+    if (!resumed && c.day && c.zip && c.lines.length) setStep(1);
     setReady(true);
   }, []);
 
@@ -82,6 +88,12 @@ export default function Checkout(p: Props) {
     const c: CartState = { ...loadCart(p.slug), day, startHour: start, endHour: endFixed, zip, lines, leadId, holdToken, contact: { name: f.name, email: f.email, phone: f.phone } };
     saveCart(p.slug, c);
   }, [ready, day, start, endFixed, zip, lines, leadId, holdToken, f.name, f.email, f.phone]);
+
+  // keep in-progress details across reloads / flaky networks (session only)
+  useEffect(() => {
+    if (!ready) return;
+    try { const { signName: _s, accepted: _a, ...rest } = f; sessionStorage.setItem(`bos:co:${p.slug}`, JSON.stringify({ step, f: rest })); } catch { /* ignore */ }
+  }, [ready, step, f]);
 
   // live availability for the event step
   useEffect(() => {
@@ -152,6 +164,21 @@ export default function Checkout(p: Props) {
     });
   };
 
+  const [alts, setAlts] = useState<string[] | null>(null);
+  useEffect(() => {
+    setAlts(null);
+    const conflictsNow = quote?.conflicts.map((c) => c.itemId) ?? [];
+    if (!day || !(avail && (!avail.ok || conflictsNow.length))) return;
+    let live = true;
+    nearbyOpenDates(p.api, day, start, endFixed, p.minDay, p.maxDay, conflictsNow.length ? conflictsNow : []).then((d) => { if (live) setAlts(d); });
+    return () => { live = false; };
+  }, [avail, quote?.conflicts.length]);
+  const altDates = alts && alts.length > 0 && (
+    <div class="rounded-2xl bg-soft p-3">
+      <p class="text-sm font-extrabold">Open nearby{quote?.conflicts.length ? ' for those items' : ''}:</p>
+      <div class="mt-2 flex flex-wrap gap-2">{alts.map((d) => <button type="button" class="s-filter !min-h-11 !text-sm" onClick={() => setDay(d)}>{prettyDay(d)}</button>)}</div>
+    </div>
+  );
   const conflictIds = new Set((quote?.conflicts ?? []).map((c) => c.itemId));
   const rulesBlocked = avail && !avail.ok;
   const zoneInfo = avail && zipOk ? zoneText(avail.zone, zip) : null;
@@ -251,8 +278,8 @@ export default function Checkout(p: Props) {
       <button type="button" class="s-btn s-btn-cta s-btn-lg" disabled={disabled} onClick={onNext ?? (() => next(s))}>{label}</button>
     </div>
   );
-  const Row = ({ label, cents, neg, strong }: { label: string; cents: number; neg?: boolean; strong?: boolean }) => (
-    <div class={`flex justify-between gap-3 ${strong ? 'text-base font-extrabold' : 'text-sm'}`}><span>{label}</span><span class="s-price">{neg ? '−' : ''}{money(cents)}</span></div>
+  const Row = ({ label, cents, neg, strong, free }: { label: string; cents: number; neg?: boolean; strong?: boolean; free?: boolean }) => (
+    <div class={`flex justify-between gap-3 ${strong ? 'text-base font-extrabold' : 'text-sm'}`}><span>{label}</span><span class="s-price">{free && cents === 0 ? 'Free' : `${neg ? '−' : ''}${money(cents)}`}</span></div>
   );
 
   const summary = (
@@ -280,7 +307,7 @@ export default function Checkout(p: Props) {
       {quote && (
         <div class="mt-4 grid gap-1.5 border-t border-line pt-4">
           <Row label="Rentals" cents={quote.subtotalCents} />
-          <Row label={quote.deliveryCents ? 'Delivery, setup & pickup' : 'Delivery, setup & pickup (free)'} cents={quote.deliveryCents} />
+          <Row label="Delivery, setup & pickup" cents={quote.deliveryCents} free />
           {quote.surfaceCents > 0 && <Row label="Surface setup (sandbags/tarps)" cents={quote.surfaceCents} />}
           {quote.damageWaiverCents > 0 && <Row label="Damage waiver" cents={quote.damageWaiverCents} />}
           {quote.discountCents > 0 && <Row label={`Discount${quote.coupon ? ` (${quote.coupon.code})` : ''}`} cents={quote.discountCents} neg />}
@@ -350,12 +377,12 @@ export default function Checkout(p: Props) {
           <div class="col-span-2 sm:col-span-1">
             <label class="s-label" for="co-day">Event date</label>
             <input id="co-day" type="date" class="s-input" min={p.minDay} max={p.maxDay} value={day} onInput={(e) => { setDay((e.target as HTMLInputElement).value); setErrors({}); }} {...inv('day')} />
-            <Err k="day" />
+            {Err({ k: 'day' })}
           </div>
           <div class="col-span-2 sm:col-span-1">
             <label class="s-label" for="co-zip">Delivery ZIP</label>
             <input id="co-zip" class="s-input" inputMode="numeric" autoComplete="postal-code" maxLength={5} placeholder="e.g. 77008" value={zip} onInput={(e) => { setZip((e.target as HTMLInputElement).value.replace(/\D/g, '').slice(0, 5)); setErrors({}); }} {...inv('zip')} />
-            <Err k="zip" />
+            {Err({ k: 'zip' })}
           </div>
           <div>
             <label class="s-label" for="co-start">Start time</label>
@@ -372,15 +399,16 @@ export default function Checkout(p: Props) {
         </div>
         <div class="mt-4 grid gap-2" aria-live="polite">
           {avail && !avail.ok && <p class="s-chip s-chip-warn whitespace-normal">{avail.message}</p>}
+          {avail && !avail.ok && altDates}
           {avail?.ok && <p class="s-chip s-chip-ok">● {avail.available} rentals open {prettyDay(day)}</p>}
           {zoneInfo && <p class={`s-chip ${zoneInfo.tone === 'ok' ? '' : 's-chip-bad'} whitespace-normal`}>{zoneInfo.text}</p>}
         </div>
-        <Nav s={0} label={lines.length ? 'Review my cart →' : 'Choose rentals →'} onNext={() => {
+        {Nav({ s: 0, label: lines.length ? 'Review my cart →' : 'Choose rentals →', onNext: () => {
           const e = validate(0); setErrors(e);
           if (Object.keys(e).length || rulesBlocked) return;
           if (!lines.length) { location.href = `${p.base}/rentals?date=${day}&start=${start}&end=${endFixed}&zip=${zip}`; return; }
           go(1);
-        }} />
+        } })}
       </section>
     );
   } else if (step === 1) {
@@ -452,8 +480,9 @@ export default function Checkout(p: Props) {
             {quote?.couponInvalid && <p class="s-err">That code isn’t valid.</p>}
           </form>
         </div>
-        <Err k="cart" />
-        <Nav s={1} label="Continue to setup →" disabled={!lines.length} />
+        {!!quote?.conflicts.length && <div class="mt-4">{altDates}</div>}
+        {Err({ k: 'cart' })}
+        {Nav({ s: 1, label: 'Continue to setup →', disabled: !lines.length })}
       </section>
     );
   } else if (step === 2) {
@@ -465,12 +494,12 @@ export default function Checkout(p: Props) {
           <div class="col-span-6">
             <label class="s-label" for="co-address">Street address</label>
             <input id="co-address" class="s-input" autoComplete="street-address" value={f.address} onInput={set('address')} {...inv('address')} />
-            <Err k="address" />
+            {Err({ k: 'address' })}
           </div>
           <div class="col-span-3 sm:col-span-3">
             <label class="s-label" for="co-city">City</label>
             <input id="co-city" class="s-input" autoComplete="address-level2" value={f.city} onInput={set('city')} {...inv('city')} />
-            <Err k="city" />
+            {Err({ k: 'city' })}
           </div>
           <div class="col-span-1 sm:col-span-1">
             <label class="s-label" for="co-state">State</label>
@@ -532,7 +561,7 @@ export default function Checkout(p: Props) {
             <textarea id="co-notes" class="s-input" rows={3} placeholder="Gate width, pets, sprinkler heads, steep driveway, setup spot…" value={f.notes} onInput={set('notes')} />
           </div>
         </div>
-        <Nav s={2} label="Continue →" />
+        {Nav({ s: 2, label: 'Continue →' })}
       </section>
     );
   } else if (step === 3) {
@@ -544,17 +573,17 @@ export default function Checkout(p: Props) {
           <div class="sm:col-span-2">
             <label class="s-label" for="co-name">Full name</label>
             <input id="co-name" class="s-input" autoComplete="name" value={f.name} onInput={set('name')} {...inv('name')} />
-            <Err k="name" />
+            {Err({ k: 'name' })}
           </div>
           <div>
             <label class="s-label" for="co-phone">Mobile phone</label>
             <input id="co-phone" class="s-input" type="tel" autoComplete="tel" inputMode="tel" value={f.phone} onInput={set('phone')} {...inv('phone')} />
-            <Err k="phone" />
+            {Err({ k: 'phone' })}
           </div>
           <div>
             <label class="s-label" for="co-email">Email</label>
             <input id="co-email" class="s-input" type="email" autoComplete="email" value={f.email} onInput={set('email')} {...inv('email')} />
-            <Err k="email" />
+            {Err({ k: 'email' })}
           </div>
           <div>
             <label class="s-label" for="co-cel">Birthday star’s name <span class="font-normal s-sub">(optional)</span></label>
@@ -573,7 +602,7 @@ export default function Checkout(p: Props) {
             <span>Send me birthday reminders and occasional deals from {p.tenantName}.</span>
           </label>
         </div>
-        <Nav s={3} label="Continue to agreement →" />
+        {Nav({ s: 3, label: 'Continue to agreement →' })}
       </section>
     );
   } else if (step === 4) {
@@ -586,15 +615,15 @@ export default function Checkout(p: Props) {
           <div>
             <label class="s-label" for="co-sign">Type your full name to sign</label>
             <input id="co-sign" class="s-input font-[cursive] text-xl" autoComplete="name" value={f.signName || ''} placeholder={f.name} onInput={set('signName')} {...inv('signName')} />
-            <Err k="signName" />
+            {Err({ k: 'signName' })}
           </div>
           <label class="flex gap-3 items-start cursor-pointer min-h-11">
             <input type="checkbox" class="mt-0.5 size-5 accent-[var(--c-primary)]" checked={f.accepted} onChange={set('accepted')} {...inv('accepted')} />
             <span class="text-sm font-semibold">I’m 18+ and agree to the rental agreement, safety rules and the cancellation & weather policy. Typing my name is my electronic signature.</span>
           </label>
-          <Err k="accepted" />
+          {Err({ k: 'accepted' })}
         </div>
-        <Nav s={4} label="Continue to payment →" />
+        {Nav({ s: 4, label: 'Continue to payment →' })}
       </section>
     );
   } else {
@@ -610,7 +639,7 @@ export default function Checkout(p: Props) {
           {quote && <div class="mt-2 rounded-xl bg-soft p-4 grid gap-1"><Row label="Due today" cents={quote.depositCents} strong /><Row label={`Balance on delivery`} cents={quote.balanceCents} /></div>}
         </div>
         <p class="mt-4 text-sm font-semibold flex gap-2 items-start"><span aria-hidden="true">⏱</span> We hold your items for {p.holdMinutes} minutes while you pay. Secure checkout — we never see your card number.</p>
-        <Nav s={5} label={busy ? 'Starting secure checkout…' : quote ? `Pay ${money(quote.depositCents)} deposit` : 'Pay deposit'} disabled={busy || !quote} onNext={book} />
+        {Nav({ s: 5, label: busy ? 'Starting secure checkout…' : quote ? `Pay ${money(quote.depositCents)} deposit` : 'Pay deposit', disabled: busy || !quote, onNext: book })}
       </section>
     );
   }
@@ -620,7 +649,7 @@ export default function Checkout(p: Props) {
       <div class="min-w-0">
         {stepHeader}
         {banner && <div role="alert" class="mb-5 rounded-2xl border-2 border-[var(--color-bad)] bg-white p-4 font-bold">{banner}</div>}
-        {!ready ? <p class="s-sub">Loading your cart…</p> : body}
+        {!ready ? <p class="s-sub">Loading your cart…</p> : <div key={step}>{body}</div>}
       </div>
       {summary}
     </div>

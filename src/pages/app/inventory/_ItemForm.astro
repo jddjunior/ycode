@@ -1,6 +1,7 @@
 ---
 /** Shared create/edit form for rentals, add-ons and packages. */
 import Icon from '../../../components/Icon.astro';
+import Err from '../../../components/ops/Err.astro';
 import { centsToInput } from '../../../lib/ops/ctx';
 import type { OpsSpecs } from '../../../lib/ops/items';
 import type { schema } from '../../../db/client';
@@ -12,9 +13,11 @@ interface Props {
   others: { id: string; name: string; kind: string }[];
   surfaces: { key: string; label: string }[];
   error?: string;
+  errors?: Record<string, string>;
   submitLabel: string;
 }
-const { item = {}, categories, others, surfaces, error, submitLabel } = Astro.props;
+const { item = {}, categories, others, surfaces, error, errors = {}, submitLabel } = Astro.props;
+const inv = (k: string) => (errors[k] ? { 'aria-invalid': 'true' as const, 'aria-describedby': `${k}-err` } : {});
 const sp = (item.specs ?? {}) as OpsSpecs;
 const kind = item.kind ?? 'rental';
 const bundle = new Map((item.bundle ?? []).map((b) => [b.itemId, b.qty]));
@@ -26,7 +29,7 @@ const num = (v: number | undefined) => (v == null ? '' : String(v));
   <input type="hidden" name="_action" value="save" />
   <div class="space-y-6 min-w-0">
     {error && <p role="alert" class="rounded-xl bg-red-50 border border-red-200 text-red-800 text-sm px-4 py-3">{error}</p>}
-    <section class="card p-5 space-y-4" aria-labelledby="basics-h">
+    <section id="basics" class="card p-5 space-y-4 scroll-mt-20" aria-labelledby="basics-h">
       <h2 id="basics-h" class="font-bold text-lg">Basics</h2>
       <fieldset>
         <legend class="label">Type</legend>
@@ -39,14 +42,14 @@ const num = (v: number | undefined) => (v == null ? '' : String(v));
         </div>
       </fieldset>
       <div class="grid gap-3 sm:grid-cols-2">
-        <div><label class="label" for="name">Name</label><input id="name" name="name" class="input" required maxlength="120" value={item.name ?? ''} /></div>
+        <div><label class="label" for="name">Name</label><input id="name" name="name" class="input" required maxlength="120" value={item.name ?? ''} {...inv('name')} /><Err id="name-err" msg={errors.name} /></div>
         <div><label class="label" for="categoryId">Category</label>
           <select id="categoryId" name="categoryId" class="input"><option value="">— None —</option>{categories.map((c) => <option value={c.id} selected={c.id === item.categoryId}>{c.name}</option>)}</select></div>
       </div>
       <div><label class="label" for="tagline">Tagline</label><input id="tagline" name="tagline" class="input" maxlength="200" value={item.tagline ?? ''} placeholder="Our best-seller: bright, roomy and perfect for ages 3–12." /></div>
       <div><label class="label" for="description">Description</label><textarea id="description" name="description" class="input" rows="5">{item.description ?? ''}</textarea></div>
       <div><label class="label" for="images">Image URLs <span class="font-normal text-ink-2">(one per line, first is the cover)</span></label>
-        <textarea id="images" name="images" class="input font-mono text-xs" rows="3" placeholder="/demo/castle-rainbow.svg">{(item.images ?? []).join('\n')}</textarea>
+        <textarea id="images" name="images" class="input font-mono text-xs" rows="3" placeholder="/demo/castle-rainbow.svg" {...inv('images')}>{(item.images ?? []).join('\n')}</textarea><Err id="images-err" msg={errors.images} />
         <p class="hint">Use https:// links or the demo art in /demo/*.svg (e.g. /demo/castle-pink.svg, /demo/slide-dual.svg).</p>
         {(item.images ?? []).length > 0 && <div class="flex gap-2 mt-2 flex-wrap">{(item.images ?? []).map((u) => <img src={u} alt="" class="size-16 rounded-lg object-cover border border-line bg-canvas" loading="lazy" />)}</div>}
       </div>
@@ -56,16 +59,16 @@ const num = (v: number | undefined) => (v == null ? '' : String(v));
       <h2 id="price-h" class="font-bold text-lg">Pricing & inventory</h2>
       <p class="text-sm text-ink-2">Flat price covers the base hours. BounceOS never charges you per item.</p>
       <div class="grid gap-3 grid-cols-2 sm:grid-cols-4 mt-3">
-        <div><label class="label" for="price">Price ($)</label><input id="price" name="price" class="input" inputmode="decimal" required value={centsToInput(item.priceCents ?? null)} /></div>
+        <div><label class="label" for="price">Price ($)</label><input id="price" name="price" class="input" inputmode="decimal" required value={centsToInput(item.priceCents ?? null)} {...inv('priceCents')} /><Err id="priceCents-err" msg={errors.priceCents} /></div>
         <div><label class="label" for="baseHours">Base hours</label><input id="baseHours" name="baseHours" type="number" min="1" max="72" class="input" value={item.baseHours ?? 8} /></div>
         <div><label class="label" for="extraHour">Extra hour ($)</label><input id="extraHour" name="extraHour" class="input" inputmode="decimal" value={centsToInput(item.extraHourCents ?? 0)} /></div>
         <div><label class="label" for="overnight">Overnight ($)</label><input id="overnight" name="overnight" class="input" inputmode="decimal" value={centsToInput(item.overnightCents ?? null)} placeholder="—" /></div>
-        <div><label class="label" for="quantity">Units owned</label><input id="quantity" name="quantity" type="number" min="0" max="999" class="input" value={item.quantity ?? 1} /></div>
+        <div><label class="label" for="quantity">Units owned</label><input id="quantity" name="quantity" type="number" min="0" max="999" class="input" value={item.quantity ?? 1} {...inv('quantity')} /><Err id="quantity-err" msg={errors.quantity} /></div>
         <div><label class="label" for="setupMinutes">Setup buffer (min)</label><input id="setupMinutes" name="setupMinutes" type="number" min="0" max="600" class="input" value={item.setupMinutes ?? 45} /></div>
         <div><label class="label" for="teardownMinutes">Teardown buffer (min)</label><input id="teardownMinutes" name="teardownMinutes" type="number" min="0" max="600" class="input" value={item.teardownMinutes ?? 45} /></div>
         <div><label class="label" for="purchaseCost">Purchase cost ($)</label><input id="purchaseCost" name="purchaseCost" class="input" inputmode="decimal" value={centsToInput(sp.purchaseCostCents ?? null)} placeholder="For ROI" /></div>
       </div>
-      <p class="hint">Buffers block the unit before and after each event for travel, setup and cleaning. Packages ignore “units owned” — availability comes from their components.</p>
+      <p class="hint"><strong class="text-ink">Buffers</strong> block the unit before and after every event for travel, setup and cleaning — a 45-minute setup buffer on an 11 AM party means the unit is busy from 10:15. Bigger buffers prevent back-to-back bookings you can’t physically make. Packages ignore “units owned”: their availability comes from their components.</p>
     </section>
 
     <section class="card p-5" aria-labelledby="specs-h">
@@ -91,12 +94,13 @@ const num = (v: number | undefined) => (v == null ? '' : String(v));
       </fieldset>
     </section>
 
-    <section class="card p-5" aria-labelledby="bundle-h">
+    <section id="bundle" class="card p-5 scroll-mt-20" aria-labelledby="bundle-h">
       <h2 id="bundle-h" class="font-bold text-lg">Package contents & upsells</h2>
       <p class="text-sm text-ink-2">For packages, set how many of each item the bundle includes. Upsells are suggested at checkout.</p>
       <div class="grid gap-4 md:grid-cols-2 mt-3">
         <fieldset>
           <legend class="label">Bundle components (packages only)</legend>
+          <Err id="bundle-err" msg={errors.bundle} />
           <ul class="max-h-72 overflow-y-auto rounded-xl border border-line divide-y divide-line">
             {others.filter((o) => o.kind !== 'package').map((o) => (
               <li class="flex items-center gap-2 px-3 py-1.5"><label for={`b-${o.id}`} class="text-sm flex-1 min-w-0 truncate">{o.name}</label><input id={`b-${o.id}`} name={`bundle_${o.id}`} type="number" min="0" max="20" class="input !min-h-9 w-16" value={bundle.get(o.id) ?? ''} placeholder="0" /></li>
@@ -117,7 +121,7 @@ const num = (v: number | undefined) => (v == null ? '' : String(v));
 
     <section class="card p-5 space-y-3" aria-labelledby="seo-h">
       <h2 id="seo-h" class="font-bold text-lg">SEO</h2>
-      <div><label class="label" for="slug">URL slug</label><input id="slug" name="slug" class="input font-mono text-sm" value={item.slug ?? ''} placeholder="auto from name" /></div>
+      <div><label class="label" for="slug">URL slug</label><input id="slug" name="slug" class="input font-mono text-sm" value={item.slug ?? ''} placeholder="auto from name" {...inv('slug')} /><Err id="slug-err" msg={errors.slug} /></div>
       <div><label class="label" for="seoTitle">SEO title <span class="font-normal text-ink-2">(≤ 60 chars)</span></label><input id="seoTitle" name="seoTitle" class="input" maxlength="70" value={item.seoTitle ?? ''} placeholder={`${item.name ?? 'Rainbow Castle'} Rental | Your City`} /></div>
       <div><label class="label" for="seoDescription">Meta description <span class="font-normal text-ink-2">(≤ 160 chars)</span></label><textarea id="seoDescription" name="seoDescription" class="input" rows="2" maxlength="170">{item.seoDescription ?? ''}</textarea></div>
     </section>
@@ -130,7 +134,7 @@ const num = (v: number | undefined) => (v == null ? '' : String(v));
       <label class="flex items-center gap-2 text-sm"><input type="checkbox" name="featured" checked={item.featured ?? false} class="accent-brand size-4" />Featured on homepage</label>
       <label class="flex items-center gap-2 text-sm"><input type="checkbox" name="isWet" checked={item.isWet ?? false} class="accent-brand size-4" />Wet unit (needs water)</label>
       <div><label class="label" for="sort">Sort order</label><input id="sort" name="sort" type="number" class="input" value={item.sort ?? 0} /></div>
-      <button class="btn-primary w-full"><Icon name="check" size={16} />{submitLabel}</button>
+      <button class="btn-primary w-full" data-busy-label="Saving…"><Icon name="check" size={16} />{submitLabel}</button>
     </section>
     <slot name="aside" />
   </aside>

@@ -4,6 +4,8 @@ import { and, desc, eq, ilike, or, sql, type SQL } from 'drizzle-orm';
 import AppLayout from '../../../layouts/AppLayout.astro';
 import Icon from '../../../components/Icon.astro';
 import Tabs from './_Tabs.astro';
+import Help from '../../../components/ops/Help.astro';
+import Empty from '../../../components/ops/Empty.astro';
 import { getDb, schema } from '../../../db/client';
 import { money } from '../../../lib/pricing';
 import { opsCtx, CUSTOMER_TYPES, dateOnly } from '../../../lib/ops/ctx';
@@ -34,6 +36,13 @@ const initials = (n: string) => n.split(/\s+/).map((p) => p[0]).join('').slice(0
 <AppLayout title="Customers & Leads" section="customers" subtitle={`${agg?.n ?? 0} customers · ${money(agg?.ltv ?? 0)} lifetime value`} wide>
   <Fragment slot="actions"><a href="/app/bookings/new" class="btn-ghost"><Icon name="plus" size={16} />Booking for new customer</a></Fragment>
   <Tabs active="customers" leads={leadsOpen} />
+  <Help benefit="Know your best customers by name — lifetime value, birthdays and tags power re-book campaigns that fill next year’s calendar.">
+    <ul>
+      <li>Customers are created automatically from website checkouts and phone bookings (matched by email, so no duplicates).</li>
+      <li>Tag schools, churches and VIPs, then target them in Campaigns. Birthday kids get an automatic “book again” reminder a month ahead.</li>
+      <li>LTV counts every payment received, including cash and checks.</li>
+    </ul>
+  </Help>
   <form method="get" class="card p-3 grid gap-3 sm:grid-cols-[1fr_180px_160px_auto] items-end">
     <div><label class="label" for="q">Search</label><input id="q" name="q" type="search" class="input" placeholder="Name, email, phone or organization" value={search} /></div>
     <div><label class="label" for="type">Type</label><select id="type" name="type" class="input"><option value="">All types</option>{CUSTOMER_TYPES.map((x) => <option value={x} selected={x === type} class="capitalize">{x[0].toUpperCase() + x.slice(1)}</option>)}</select></div>
@@ -47,13 +56,18 @@ const initials = (n: string) => n.split(/\s+/).map((p) => p[0]).join('').slice(0
     </div>
   )}
   {rows.length === 0 ? (
-    <div class="card p-10 text-center mt-4">
-      <span class="mx-auto grid place-items-center size-12 rounded-2xl bg-brand-soft text-brand"><Icon name="users" /></span>
-      <h2 class="font-bold text-lg mt-3">{search || type || tag ? 'No customers match' : 'No customers yet'}</h2>
-      <p class="text-sm text-ink-2 mt-1">Customers are created automatically from website bookings and phone orders.</p>
-    </div>
+    <div class="mt-4"><Empty icon="users" title={search || type || tag ? 'No customers match' : 'No customers yet'} text="Customers are created automatically from website bookings and phone orders." cta={{ href: '/app/bookings/new', label: 'Take a phone booking' }} learn={{ href: '/app/customers', label: 'Clear filters' }} /></div>
   ) : (
-    <div class="card overflow-hidden mt-4">
+    <ul class="md:hidden mt-4 space-y-2">
+      {rows.map(({ c, n }) => (
+        <li><a href={`/app/customers/${c.id}`} class="card p-4 flex items-center gap-3">
+          <span class="grid place-items-center size-10 rounded-full bg-brand-soft text-brand text-xs font-bold shrink-0" aria-hidden="true">{initials(c.name || c.email)}</span>
+          <span class="min-w-0 flex-1"><span class="block font-semibold truncate">{c.name || c.email}</span><span class="block text-xs text-ink-2 truncate">{n ?? 0} booking{n === 1 ? '' : 's'} · <span class="capitalize">{c.type}</span>{c.tags.length ? ` · #${c.tags.slice(0, 2).join(' #')}` : ''}</span></span>
+          <span class="font-bold tabular-nums text-sm">{money(c.lifetimeValueCents)}</span>
+        </a></li>
+      ))}
+    </ul>
+    <div class="card overflow-hidden mt-4 hidden md:block">
       <table class="table">
         <thead><tr><th scope="col">Customer</th><th scope="col" class="hidden md:table-cell">Type & tags</th><th scope="col" class="text-right hidden sm:table-cell">Bookings</th><th scope="col" class="hidden lg:table-cell">Last event</th><th scope="col" class="text-right">LTV</th></tr></thead>
         <tbody>
