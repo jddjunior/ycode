@@ -16,18 +16,22 @@ import { addDays } from '../src/lib/time';
 import { generateSearchAd } from '../src/lib/ai';
 import { PLANS } from '../src/lib/plans';
 
+// Passwords: local defaults, overridable per environment (staging sets these from Railway variables).
+const DEMO_PW = process.env.SEED_DEMO_PASSWORD || 'bounce-demo-2026';
+const PARTNER_PW = process.env.SEED_PARTNER_PASSWORD || 'partner-demo-2026';
+const HQ_PW = process.env.SEED_HQ_PASSWORD || 'branch-hq-2026';
 const db = await getDb();
 const [exists] = await db.select().from(schema.tenants).where(eq(schema.tenants.slug, 'bounce-brigade')).limit(1);
 if (exists) { console.log('• demo data already present'); process.exit(0); }
 
 // Partner operator first so the demo tenant can be "referred" by it.
 const { tenant: partner } = await provisionTenant({
-  name: 'Gulf Coast Jumpers', email: 'partner@bounceos.app', password: 'partner-demo-2026', city: 'Pasadena', state: 'TX', zip: '77502',
+  name: 'Gulf Coast Jumpers', email: 'partner@bounceos.app', password: PARTNER_PW, city: 'Pasadena', state: 'TX', zip: '77502',
   lat: 29.6911, lng: -95.2091, theme: 'splash', serviceCities: ['Baytown', 'League City'], plan: 'starter',
 });
 
 const { tenant } = await provisionTenant({
-  name: 'Bounce Brigade', email: 'demo@bounceos.app', password: 'bounce-demo-2026', ownerName: 'Jordan Rivera', phone: '(713) 555-0142',
+  name: 'Bounce Brigade', email: 'demo@bounceos.app', password: DEMO_PW, ownerName: 'Jordan Rivera', phone: '(713) 555-0142',
   city: 'Houston', state: 'TX', zip: '77008', lat: 29.7989, lng: -95.4103, timezone: 'America/Chicago', theme: 'carnival', plan: 'pro',
   serviceCities: ['Katy', 'Sugar Land', 'Pearland', 'Cypress', 'The Woodlands', 'Spring', 'Bellaire'], referralCode: partner.referralCode,
 });
@@ -185,9 +189,10 @@ await db.insert(schema.partnerships).values([
 
 await db.insert(schema.achievements).values([{ tenantId: t.id, key: 'first_booking' }, { tenantId: t.id, key: 'site_live' }, { tenantId: t.id, key: 'five_star' }]);
 
-await db.insert(schema.users).values({ email: 'hq@branchavenue.com', name: 'Branch Avenue HQ', passwordHash: await hashPassword('branch-hq-2026'), isPlatformAdmin: true }).onConflictDoNothing();
+await db.insert(schema.users).values({ email: 'hq@branchavenue.com', name: 'Branch Avenue HQ', passwordHash: await hashPassword(HQ_PW), isPlatformAdmin: true }).onConflictDoNothing();
 
 console.log('✓ seeded demo data');
-console.log('  operator: demo@bounceos.app / bounce-demo-2026');
-console.log('  HQ:       hq@branchavenue.com / branch-hq-2026');
+const shown = (pw: string, env: string) => (process.env[env] ? `(from ${env})` : pw);
+console.log(`  operator: demo@bounceos.app / ${shown(DEMO_PW, 'SEED_DEMO_PASSWORD')}`);
+console.log(`  HQ:       hq@branchavenue.com / ${shown(HQ_PW, 'SEED_HQ_PASSWORD')}`);
 process.exit(0);

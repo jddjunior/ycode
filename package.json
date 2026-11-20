@@ -12,7 +12,8 @@
   "scripts": {
     "dev": "astro dev --port 4321",
     "build": "astro check && astro build",
-    "build:fast": "astro build",
+    "build:fast": "astro build && npm run build:seed",
+    "build:seed": "esbuild scripts/seed.ts --bundle --platform=node --format=esm --packages=external --outfile=dist/seed.mjs --log-level=warning",
     "start": "node ./dist/server/entry.mjs",
     "preview": "astro preview",
     "db:generate": "drizzle-kit generate",
@@ -40,6 +41,7 @@
     "@astrojs/check": "^0.9.12",
     "@types/node": "^26.6.6",
     "drizzle-kit": "^0.31.11",
+    "esbuild": "^0.28.2",
     "tsx": "^4.23.15",
     "typescript": "^6.0.3",
     "vitest": "^5.1.1"

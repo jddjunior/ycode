@@ -15,4 +15,5 @@ COPY --from=build /app/drizzle ./drizzle
 COPY --from=build /app/package.json ./
 USER node
 EXPOSE 8080
-CMD ["node", "./dist/server/entry.mjs"]
+# SEED_DEMO=true loads idempotent demo data on boot (staging only).
+CMD ["sh", "-c", "if [ \"$SEED_DEMO\" = true ]; then node ./dist/seed.mjs || echo seed-skipped; fi; exec node ./dist/server/entry.mjs"]
