@@ -1,6 +1,7 @@
 ---
 import PlatformLayout from '../layouts/PlatformLayout.astro';
 import Icon from '../components/Icon.astro';
+import HeroScene from '../components/marketing/HeroScene.astro';
 import { PLANS, planList, MARKETPLACE_FEE_BPS } from '../lib/plans';
 import { platformUrl } from '../lib/tenant';
 import { money } from '../lib/pricing';
@@ -45,194 +46,331 @@ const pillars = [
     { icon: 'dollar', t: 'A ledger you can audit', d: 'Every commission, share and payout status in one place — no mystery deductions.' },
   ] },
 ];
+const rentalTypes = ['Bounce houses', 'Water slides', 'Combo bouncers', 'Obstacle courses', 'Interactive games', 'Concessions', 'Tents, tables & chairs'];
+const inflatable = [
+  { icon: 'cloud', t: 'Wind limit on every booking', d: 'Set your limit (15 mph by default). Each event day is checked against the forecast and flagged Clear, Watch or Stop.' },
+  { icon: 'shield', t: 'Grass, concrete or gym floor', d: 'Customers pick the setup surface at checkout. Sandbag and indoor fees are added automatically.' },
+  { icon: 'bolt', t: 'Blowers, outlets and generators', d: 'Every unit lists the outlets it needs. No power within 50 ft? The generator add-on is offered right in the cart.' },
+  { icon: 'sparkle', t: 'Wet or dry, and when', d: 'Mark slides wet, dry or both. Shoppers filter by it, and the prep checklist reminds them about the hose.' },
+  { icon: 'clock', t: 'Setup and teardown buffers', d: 'A castle that ends at 5 isn’t free at 5. Buffers per unit keep back-to-back bookings honest.' },
+  { icon: 'map', t: 'Parks, schools and churches', d: 'City pages cover permits and generator rules, and your certificate-of-insurance promise is built into the site.' },
+  { icon: 'wrench', t: 'Cleaning and repair logs', d: 'Crew log cleaning from their phone. A unit out for a patch comes off the calendar until it’s back.' },
+  { icon: 'check', t: 'Safety rules, signed', d: 'Your rental agreement and safety rules are e-signed at checkout, with name, time and IP on file.' },
+];
+const themes = [
+  { key: 'carnival', name: 'Backyard Carnival' }, { key: 'splash', name: 'Splash Pop' },
+  { key: 'mono', name: 'Modern Mono Party' }, { key: 'arcade', name: 'Arcade' },
+];
 ---
-<PlatformLayout title="BounceOS — Bounce House Rental Software That Gets You Booked | Branch Avenue HQ" description="Booking, deliveries, an SEO website, email & SMS, social, Google Ads and a partner network for bounce house and party rental companies. Flat pricing, unlimited items, you own your site." ld={ld}>
-  <!-- Hero -->
-  <section class="relative overflow-hidden bg-ink text-white">
-    <div class="absolute inset-0 [background:radial-gradient(55%_70%_at_85%_0%,rgba(91,60,245,.75)_0%,transparent_65%),radial-gradient(35%_55%_at_0%_100%,rgba(255,90,31,.55)_0%,transparent_60%)]" aria-hidden="true"></div>
-    <div class="absolute inset-0 opacity-[.07] [background-image:radial-gradient(#fff_1px,transparent_1px)] [background-size:22px_22px]" aria-hidden="true"></div>
-    <div class="relative max-w-6xl mx-auto px-4 pt-14 pb-16 sm:pt-20 sm:pb-24 grid gap-12 lg:grid-cols-[1.05fr_.95fr] items-center">
-      <div>
-        <p class="inline-flex items-center gap-2 rounded-full bg-white/10 px-3 py-1 text-xs font-semibold text-white/90 ring-1 ring-white/15"><span class="size-1.5 rounded-full bg-sun"></span>By Branch Avenue HQ · built for party rental operators</p>
-        <h1 class="mt-5 text-[2.6rem] leading-[0.98] sm:text-7xl font-extrabold tracking-tight text-white">Get <span class="relative whitespace-nowrap text-sun">booked<svg class="absolute -bottom-2 left-0 w-full" viewBox="0 0 200 12" aria-hidden="true"><path d="M2 9C50 2 150 2 198 8" stroke="#FF5A1F" stroke-width="4" fill="none" stroke-linecap="round" /></svg></span>,<br />not just organized.</h1>
-        <p class="mt-6 text-lg sm:text-xl text-white/75 max-w-xl">BounceOS runs your bounce house business — bookings, deliveries, crew — and fills the calendar with a website, SEO, campaigns, social and ads that are already built in.</p>
-        <div class="mt-8 flex flex-wrap gap-3">
-          <a href="/signup" class="btn-pop min-h-13 px-6 text-base rounded-2xl">Start your free 30-day trial <Icon name="arrow" size={18} /></a>
-          <a href="/pricing" class="btn min-h-13 px-6 text-base rounded-2xl bg-white/10 text-white ring-1 ring-white/20 hover:bg-white/15">See pricing</a>
-        </div>
-        <ul class="mt-8 grid grid-cols-1 sm:grid-cols-3 gap-3 text-sm text-white/75">
-          <li class="flex items-center gap-2"><Icon name="check" size={16} class="text-sun shrink-0" />No per-item pricing</li>
-          <li class="flex items-center gap-2"><Icon name="check" size={16} class="text-sun shrink-0" />You own your site</li>
-          <li class="flex items-center gap-2"><Icon name="check" size={16} class="text-sun shrink-0" />Free assisted migration</li>
-        </ul>
-      </div>
+<PlatformLayout title="BounceOS — Bounce House Rental Software That Gets You Booked | Branch Avenue HQ" description="Bounce house rental software: online booking, deliveries, crew app, an SEO website, email & SMS, social, Google Ads and a partner network. Flat pricing, unlimited inflatables, you own your site." ld={ld}>
+  <Fragment slot="head">
+    <link href="https://fonts.googleapis.com/css2?family=Fredoka:wght@500;600;700&display=swap" rel="stylesheet" />
+  </Fragment>
 
-      <!-- Product vignette (pure HTML/CSS) -->
-      <div class="relative" aria-hidden="true">
-        <div class="absolute -inset-6 rounded-[2.5rem] bg-gradient-to-br from-brand/40 to-pop/30 blur-2xl"></div>
-        <div class="relative rounded-[1.75rem] bg-white text-ink p-5 shadow-2xl ring-1 ring-black/5 rotate-[1.2deg]">
-          <div class="flex items-center gap-2">
-            <span class="grid place-items-center size-8 rounded-lg bg-pop font-black text-[#1B1F4A]">B</span>
-            <p class="font-[family-name:var(--font-display)] font-extrabold">This weekend</p>
-            <span class="ml-auto chip bg-green-50 text-green-800">11 booked</span>
+  <div class="lp">
+    <!-- Hero: a backyard on party day -->
+    <section class="lp-hero">
+      <div class="max-w-6xl mx-auto px-4 pt-10 sm:pt-16 grid gap-10 lg:grid-cols-[1fr_1.05fr] items-center">
+        <div class="relative z-10">
+          <p class="lp-eyebrow"><span aria-hidden="true">🎈</span> Bounce house &amp; party rental software</p>
+          <h1 class="lp-h1 mt-4">Fill every weekend.<br /><span class="lp-mark">Skip the chaos.</span></h1>
+          <p class="mt-5 text-lg sm:text-xl text-[#2A3160] max-w-xl">BounceOS takes the booking, checks the wind, routes the truck and brings last year’s birthday parents back — with a website that ranks in every town you deliver to.</p>
+          <div class="mt-7 flex flex-wrap gap-3">
+            <a href="/signup" class="lp-cta">Start your free 30-day trial <Icon name="arrow" size={18} /></a>
+            <a href="/sites/bounce-brigade/" class="lp-ghost">See a live rental site</a>
           </div>
-          <div class="mt-4 grid grid-cols-3 gap-2">
-            {[['Sat', 7, 'bg-brand'], ['Sun', 4, 'bg-pop'], ['Mon', 0, 'bg-line']].map(([d, n, c]) => (
-              <div class="rounded-2xl bg-canvas p-3"><p class="text-xs text-ink-2 font-semibold">{d}</p><p class="text-2xl font-extrabold font-[family-name:var(--font-display)]">{n}</p><div class="mt-2 h-1.5 rounded-full bg-line"><div class={`h-full rounded-full ${c}`} style={`width:${Number(n) * 12}%`}></div></div></div>
-            ))}
+          <ul class="mt-6 flex flex-wrap gap-x-5 gap-y-2 text-sm font-semibold text-[#1B1F4A]">
+            <li class="flex items-center gap-1.5"><Icon name="check" size={16} class="text-[#15803D]" />Unlimited inflatables, one flat price</li>
+            <li class="flex items-center gap-1.5"><Icon name="check" size={16} class="text-[#15803D]" />You own your website</li>
+            <li class="flex items-center gap-1.5"><Icon name="check" size={16} class="text-[#15803D]" />No card to start</li>
+          </ul>
+        </div>
+        <div class="relative">
+          <HeroScene class="lp-scene" />
+          <div class="lp-toast lp-toast-1">
+            <span class="lp-toast-ico bg-[#DCFCE7] text-[#15803D]"><Icon name="check" size={16} /></span>
+            <span><strong>New booking · Rainbow Castle</strong><br /><span class="text-[#4A4866]">Sat 11 AM · $51 deposit paid</span></span>
           </div>
-          <div class="mt-3 rounded-2xl border border-line p-3 flex items-center gap-3">
-            <span class="grid place-items-center size-9 rounded-xl bg-brand-soft text-brand"><Icon name="target" size={18} /></span>
-            <div class="min-w-0"><p class="text-xs text-ink-2">Google Ads · Katy</p><p class="font-bold">$14.20 <span class="text-xs font-semibold text-ink-2">cost per booking</span></p></div>
-            <span class="ml-auto chip bg-green-50 text-green-800">↓ 18%</span>
+          <div class="lp-toast lp-toast-2">
+            <span class="lp-toast-ico bg-[#FEF3C7] text-[#92400E]"><Icon name="cloud" size={16} /></span>
+            <span><strong>Wind watch · Sunday</strong><br /><span class="text-[#4A4866]">Gusts 19 mph · 2 events flagged</span></span>
           </div>
-          <div class="mt-3 rounded-2xl border border-line p-3 flex items-center gap-3">
-            <span class="grid place-items-center size-9 rounded-xl bg-sun/30 text-[#7A5200]"><Icon name="star" size={18} /></span>
-            <div class="min-w-0"><p class="text-xs text-ink-2">Review requests sent</p><p class="font-bold">9 today · same link for everyone</p></div>
+          <div class="lp-toast lp-toast-3">
+            <span class="lp-toast-ico bg-[#E0E7FF] text-[#3730A3]"><Icon name="truck" size={16} /></span>
+            <span><strong>Saturday route ready</strong><br /><span class="text-[#4A4866]">6 drop-offs · 41 miles</span></span>
           </div>
         </div>
-        <div class="absolute -left-4 -bottom-6 sm:-left-10 rounded-2xl bg-white text-ink px-4 py-3 shadow-xl ring-1 ring-black/5 -rotate-[3deg] flex items-center gap-2">
-          <span class="text-xl">🎉</span><p class="text-sm font-bold">Overflow lead sent → <span class="text-mint">+$32 share</span></p>
+      </div>
+      <svg class="lp-grass" viewBox="0 0 1440 90" preserveAspectRatio="none" aria-hidden="true"><path d="M0 50 Q180 0 360 38 T720 34 T1080 40 T1440 26 V90 H0Z" fill="#4BB35C" /><path d="M0 70 Q240 36 480 62 T960 58 T1440 60 V90 H0Z" fill="#3FA552" /></svg>
+    </section>
+
+    <!-- What you rent -->
+    <section class="bg-[#3FA552] text-white">
+      <div class="max-w-6xl mx-auto px-4 pb-7 pt-1 flex flex-wrap items-center gap-x-3 gap-y-2">
+        <p class="font-bold mr-1">Built for everything on your trailer:</p>
+        {rentalTypes.map((r) => <span class="rounded-full bg-white/18 ring-1 ring-white/30 px-3 py-1 text-sm font-semibold">{r}</span>)}
+      </div>
+    </section>
+
+    <!-- What your customers see -->
+    <section class="bg-[#FFFBF2]">
+      <div class="max-w-6xl mx-auto px-4 py-16 sm:py-20">
+        <p class="lp-kicker text-[#C2410C]">What parents see</p>
+        <h2 class="lp-h2 mt-2 max-w-3xl">A rental site that answers the only question that matters: “Is it open on my date?”</h2>
+        <p class="mt-3 text-lg text-[#4A4866] max-w-2xl">Date and ZIP first. Real availability, the delivery fee up front, a small deposit, and a signed agreement — on your domain, in your colors.</p>
+        <div class="mt-10 grid gap-6 lg:grid-cols-[1fr_260px] items-end">
+          <div>
+            <div class="lp-browser">
+              <div class="lp-browser-bar"><i></i><i></i><i></i><span>yourcompany.com</span></div>
+              {themes.map((t, i) => <img src={`/marketing/store-${t.key}.jpg`} alt={`Example operator storefront in the ${t.name} theme with a date and ZIP availability search`} width="1920" height="1200" loading="lazy" decoding="async" class:list={['lp-theme-img', i === 0 && 'is-on']} data-theme={t.key} />)}
+            </div>
+            <div class="mt-4 flex flex-wrap items-center gap-2" role="group" aria-label="Preview a theme">
+              <span class="text-sm font-semibold text-[#4A4866] mr-1">Four looks, one click:</span>
+              {themes.map((t, i) => <button type="button" class="lp-theme-btn" aria-pressed={i === 0 ? 'true' : 'false'} data-theme-btn={t.key}>{t.name}</button>)}
+            </div>
+          </div>
+          <figure class="lp-phone mx-auto">
+            <img src="/marketing/product-phone.jpg" alt="Water slide product page on a phone with price, date check and reserve button" width="780" height="1688" loading="lazy" decoding="async" />
+            <figcaption class="sr-only">Product page on a phone</figcaption>
+          </figure>
         </div>
       </div>
-    </div>
-  </section>
+    </section>
 
-  <!-- The old stack -->
-  <section class="max-w-6xl mx-auto px-4 py-16 sm:py-20">
-    <div class="grid gap-10 lg:grid-cols-2 items-center">
-      <div>
-        <p class="text-sm font-bold text-pop uppercase tracking-wider">The problem</p>
-        <h2 class="mt-2 text-3xl sm:text-5xl font-extrabold leading-tight">Four tools, four bills, and still no idea which ad booked the party.</h2>
-        <p class="mt-4 text-ink-2 text-lg">Most rental operators stitch together booking software, a separate marketing system, an SEO agency and an answering service. Prices climb with every unit you buy, and the website you paid for can’t come with you when you leave.</p>
-      </div>
-      <div class="grid gap-3">
-        {[
-          { t: 'Booking software priced per item', d: 'Some incumbents charge more as inventory grows — e.g. +$25 per 50 items on top tiers.' },
-          { t: 'A separate marketing stack', d: 'Texts, email and review requests sold as a separate subscription ($97–$497/mo for HighLevel).' },
-          { t: 'SEO as an expensive add-on', d: 'Packages like $2,400 up front or $400/mo for six months, then more “to maintain rankings”.' },
-          { t: 'Websites you can’t take with you', d: '“If you decide to leave, you can’t take it with you” — a real reviewer on a big incumbent.' },
-        ].map((x) => (
-          <div class="flex gap-4 rounded-2xl border border-line bg-white p-4">
-            <span class="grid place-items-center size-9 rounded-xl bg-red-50 text-danger shrink-0"><Icon name="x" size={18} /></span>
-            <div><p class="font-bold">{x.t}</p><p class="text-sm text-ink-2">{x.d}</p></div>
-          </div>
-        ))}
-        <p class="text-xs text-ink-2">Figures from public vendor pages and reviews, as of 2026. <a class="text-brand font-semibold" href="/compare">See the full comparison →</a></p>
-      </div>
-    </div>
-  </section>
-
-  <!-- Run / Grow / Earn -->
-  <section id="features" class="bg-canvas border-y border-line scroll-mt-16">
-    <div class="max-w-6xl mx-auto px-4 py-16 sm:py-20">
-      <div class="max-w-2xl">
-        <p class="text-sm font-bold text-brand uppercase tracking-wider">One platform</p>
-        <h2 class="mt-2 text-3xl sm:text-5xl font-extrabold leading-tight">Run the business. Grow the bookings. Earn from the network.</h2>
-      </div>
-      <div class="mt-10 grid gap-5 lg:grid-cols-3">
-        {pillars.map((p) => (
-          <div class="card p-6 flex flex-col">
-            <div class="flex items-center gap-3"><span class={`grid place-items-center size-10 rounded-2xl ${p.color} text-white font-black font-[family-name:var(--font-display)]`}>{p.key[0]}</span><div><h3 class="text-2xl font-extrabold leading-none">{p.key}</h3><p class="text-sm text-ink-2 mt-1">{p.blurb}</p></div></div>
-            <ul class="mt-6 space-y-5">
-              {p.items.map((i) => (
-                <li class="flex gap-3"><span class="grid place-items-center size-9 rounded-xl bg-canvas text-ink shrink-0"><Icon name={i.icon} size={18} /></span><div><p class="font-bold">{i.t}</p><p class="text-sm text-ink-2">{i.d}</p></div></li>
-              ))}
-            </ul>
-          </div>
-        ))}
-      </div>
-    </div>
-  </section>
-
-  <!-- How it works -->
-  <section class="max-w-6xl mx-auto px-4 py-16 sm:py-20">
-    <h2 class="text-3xl sm:text-5xl font-extrabold text-center">Live this afternoon.</h2>
-    <p class="text-center text-ink-2 mt-3 text-lg">Not “30 business days”. Three steps.</p>
-    <ol class="mt-12 grid gap-6 md:grid-cols-3">
-      {[
-        { t: 'Tell us about your business', d: 'Pick a theme and the towns you serve. Your booking website and a page for every city publish instantly.', icon: 'sparkle' },
-        { t: 'Add your rentals', d: 'Photos, sizes, prices and setup needs — or send us your spreadsheet or old site and we’ll import it.', icon: 'box' },
-        { t: 'Turn on growth', d: 'Switch on review requests and birthday re-books, schedule a week of posts, and launch a Search campaign.', icon: 'bolt' },
-      ].map((s, i) => (
-        <li class="relative card p-6">
-          <span class="absolute -top-4 left-6 grid place-items-center size-9 rounded-full bg-ink text-white font-extrabold font-[family-name:var(--font-display)]">{i + 1}</span>
-          <Icon name={s.icon} size={28} class="text-brand mt-2" />
-          <h3 class="mt-3 text-xl font-extrabold">{s.t}</h3>
-          <p class="text-ink-2 mt-2">{s.d}</p>
-        </li>
-      ))}
-    </ol>
-  </section>
-
-  <!-- Migration -->
-  <section class="max-w-6xl mx-auto px-4 pb-16 sm:pb-20">
-    <div class="relative overflow-hidden rounded-[2rem] bg-brand text-white p-8 sm:p-12">
-      <div class="absolute -right-24 -top-24 size-80 rounded-full bg-white/10" aria-hidden="true"></div>
-      <div class="absolute right-20 -bottom-28 size-64 rounded-full bg-pop/40" aria-hidden="true"></div>
-      <div class="relative grid gap-8 lg:grid-cols-[1.2fr_1fr] items-center">
-        <div>
-          <p class="chip bg-white/15 text-white">Free on every plan</p>
-          <h2 class="mt-3 text-3xl sm:text-5xl font-extrabold leading-tight text-white">Switch without losing your rankings.</h2>
-          <p class="mt-4 text-white/80 text-lg">Fear of losing Google traffic keeps operators stuck on software they’ve outgrown. We map every old URL to its new home with permanent 301 redirects, keep your titles and structured data, and schedule the move for your off-season.</p>
-          <a href="/signup" class="mt-6 btn-pop min-h-12 px-6 rounded-2xl text-base">Plan my migration</a>
-        </div>
-        <ul class="space-y-3">
-          {['Import from InflatableOffice, Event Rental Systems, WordPress or a spreadsheet', 'URL-by-URL 301 redirect map from your old sitemap', 'Your domain, your content, full export any time', 'Before/after Search Console check-in at two weeks'].map((x) => (
-            <li class="flex gap-3 rounded-2xl bg-white/10 p-4 ring-1 ring-white/15"><Icon name="check" size={20} class="text-sun shrink-0" /><span>{x}</span></li>
+    <!-- Built for inflatables -->
+    <section class="bg-white">
+      <div class="max-w-6xl mx-auto px-4 py-16 sm:py-20">
+        <p class="lp-kicker text-[#1D4ED8]">Not generic rental software</p>
+        <h2 class="lp-h2 mt-2 max-w-3xl">It knows a bounce house isn’t a folding chair.</h2>
+        <p class="mt-3 text-lg text-[#4A4866] max-w-2xl">Tool-rental and tent software treats an 18-foot water slide like any other line item. BounceOS is built around how inflatables actually go out the door.</p>
+        <ul class="mt-10 grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
+          {inflatable.map((f, i) => (
+            <li class="lp-card">
+              <span class:list={['lp-card-ico', ['bg-[#DBEAFE] text-[#1D4ED8]', 'bg-[#FFEDD5] text-[#C2410C]', 'bg-[#FEF9C3] text-[#854D0E]', 'bg-[#DCFCE7] text-[#15803D]'][i % 4]]}><Icon name={f.icon} size={20} /></span>
+              <h3 class="mt-3 font-bold text-[#1B1F4A]">{f.t}</h3>
+              <p class="mt-1 text-sm text-[#4A4866] leading-relaxed">{f.d}</p>
+            </li>
           ))}
         </ul>
       </div>
-    </div>
-  </section>
+    </section>
 
-  <!-- Pricing teaser -->
-  <section class="bg-canvas border-y border-line">
-    <div class="max-w-6xl mx-auto px-4 py-16 sm:py-20">
-      <div class="flex flex-wrap items-end gap-4">
-        <div><h2 class="text-3xl sm:text-5xl font-extrabold">Flat pricing. Unlimited rentals.</h2><p class="text-ink-2 mt-2 text-lg">Buy another bounce house — your bill doesn’t move.</p></div>
-        <a href="/pricing" class="ml-auto btn-ghost">Compare plans & fees</a>
-      </div>
-      <div class="mt-10 grid gap-5 md:grid-cols-3">
-        {plans.map((p) => (
-          <div class:list={['card p-6 relative', p.id === 'pro' && 'ring-2 ring-brand shadow-xl']}>
-            {p.id === 'pro' && <span class="absolute -top-3 left-6 chip bg-brand text-white">Most popular</span>}
-            <h3 class="text-xl font-extrabold">{p.name}</h3>
-            <p class="mt-2"><span class="text-4xl font-extrabold font-[family-name:var(--font-display)]">{money(p.monthlyCents).replace('.00', '')}</span><span class="text-ink-2">/mo</span></p>
-            <p class="text-sm text-ink-2 mt-1">+ {pct(p.platformFeeBps)} on online payments</p>
-            <ul class="mt-5 space-y-2 text-sm">{p.features.slice(0, 5).map((f) => <li class="flex gap-2"><Icon name="check" size={16} class="text-mint shrink-0 mt-0.5" />{f}</li>)}</ul>
-            <a href={`/signup?plan=${p.id}`} class:list={['mt-6 w-full', p.id === 'pro' ? 'btn-primary' : 'btn-ghost']}>Start with {p.name}</a>
+    <!-- Run: the operator side, shown -->
+    <section id="features" class="bg-[#EAF6FF]">
+      <div class="max-w-6xl mx-auto px-4 py-16 sm:py-20">
+        <p class="lp-kicker text-[#1D4ED8]">Party day, handled</p>
+        <h2 class="lp-h2 mt-2 max-w-3xl">Saturday morning, one screen tells you everything.</h2>
+        <div class="mt-10 grid gap-8 lg:grid-cols-[1fr_250px] items-center">
+          <div class="lp-browser">
+            <div class="lp-browser-bar"><i></i><i></i><i></i><span>BounceOS · Game Plan</span></div>
+            <img src="/marketing/app-gameplan.jpg" alt="BounceOS Game Plan dashboard showing bookings, revenue, today’s drop-offs with weather, the monthly goal and a party streak" width="2160" height="1350" loading="lazy" decoding="async" />
           </div>
-        ))}
-      </div>
-    </div>
-  </section>
-
-  <!-- FAQ -->
-  <section class="max-w-3xl mx-auto px-4 py-16 sm:py-20">
-    <h2 class="text-3xl sm:text-4xl font-extrabold text-center">Questions operators ask</h2>
-    <div class="mt-8 divide-y divide-line border-y border-line">
-      {faqs.map((f) => (
-        <details class="group py-4">
-          <summary class="flex items-center gap-3 cursor-pointer list-none font-bold text-lg">{f.q}<span class="ml-auto grid place-items-center size-8 rounded-full bg-canvas transition-transform group-open:rotate-45 shrink-0"><Icon name="plus" size={16} /></span></summary>
-          <p class="mt-3 text-ink-2">{f.a}</p>
-        </details>
-      ))}
-    </div>
-  </section>
-
-  <!-- CTA -->
-  <section class="max-w-6xl mx-auto px-4 pb-6">
-    <div class="rounded-[2rem] bg-ink text-white p-8 sm:p-14 text-center relative overflow-hidden">
-      <div class="absolute inset-0 [background:radial-gradient(50%_80%_at_50%_120%,rgba(255,90,31,.55),transparent_70%)]" aria-hidden="true"></div>
-      <div class="relative">
-        <h2 class="text-3xl sm:text-5xl font-extrabold text-white">Make this the summer you stop turning parties away.</h2>
-        <p class="mt-4 text-white/75 text-lg">30-day free trial. No card to start. Month to month.</p>
-        <div class="mt-8 flex flex-wrap justify-center gap-3">
-          <a href="/signup" class="btn-pop min-h-13 px-7 rounded-2xl text-base">Start free</a>
-          <a href="/find" class="btn min-h-13 px-7 rounded-2xl text-base bg-white/10 text-white ring-1 ring-white/20 hover:bg-white/15">Looking to rent? Find a company</a>
+          <figure class="lp-phone mx-auto">
+            <img src="/marketing/app-crew-phone.jpg" alt="Crew app on a phone with the day’s stops, wind limit, navigation and a setup checklist" width="780" height="1688" loading="lazy" decoding="async" />
+            <figcaption class="mt-3 text-center text-sm font-semibold text-[#1B1F4A]">The crew app: stops in order, anchor checklist, one-tap navigate.</figcaption>
+          </figure>
+        </div>
+        <div class="mt-12 grid gap-5 md:grid-cols-3">
+          {pillars.map((p, i) => (
+            <div class="lp-pillar">
+              <div class="flex items-center gap-3">
+                <span class:list={['grid place-items-center size-10 rounded-2xl font-black text-lg', ['bg-[#2563EB] text-white', 'bg-[#FF5A1F] text-[#1B1F4A]', 'bg-[#16A34A] text-white'][i]]}>{p.key[0]}</span>
+                <div><h3 class="lp-h3">{p.key}</h3><p class="text-sm text-[#4A4866]">{p.blurb}</p></div>
+              </div>
+              <ul class="mt-5 space-y-4">
+                {p.items.map((it) => (
+                  <li class="flex gap-3">
+                    <Icon name={it.icon} size={18} class="mt-0.5 shrink-0 text-[#1B1F4A]" />
+                    <span><span class="block font-semibold text-[#1B1F4A]">{it.t}</span><span class="block text-sm text-[#4A4866] leading-relaxed">{it.d}</span></span>
+                  </li>
+                ))}
+              </ul>
+            </div>
+          ))}
         </div>
       </div>
-    </div>
-  </section>
+    </section>
+
+    <!-- The problem with what you use now -->
+    <section class="bg-white">
+      <div class="max-w-6xl mx-auto px-4 py-16 sm:py-20 grid gap-10 lg:grid-cols-2 items-center">
+        <div>
+          <p class="lp-kicker text-[#C2410C]">Sound familiar?</p>
+          <h2 class="lp-h2 mt-2">You bought another slide, and your software bill went up.</h2>
+          <p class="mt-4 text-lg text-[#4A4866]">Most operators stitch together booking software, a separate marketing system, an SEO agency and an answering service. Prices climb with every unit, and the website you paid for can’t come with you when you leave.</p>
+          <a href="/compare" class="mt-5 inline-flex items-center gap-1.5 font-bold text-[#1D4ED8] hover:underline underline-offset-4">See the full comparison <Icon name="arrow" size={16} /></a>
+        </div>
+        <ul class="space-y-3">
+          {[
+            ['Priced per item', 'Some incumbents charge more as inventory grows — e.g. +$25 per 50 items on top tiers.'],
+            ['Marketing is a second bill', 'Texts, email and review requests sold as a separate subscription ($97–$497/mo for HighLevel).'],
+            ['SEO as an expensive add-on', 'Packages like $2,400 up front or $400/mo for six months, then more “to maintain rankings”.'],
+            ['A website you can’t take with you', '“If you decide to leave, you can’t take it with you” — a real reviewer on a big incumbent.'],
+          ].map(([t, d]) => (
+            <li class="lp-card flex gap-3"><span class="grid place-items-center size-9 shrink-0 rounded-xl bg-[#FEE2E2] text-[#B91C1C]"><Icon name="x" size={18} /></span><span><span class="block font-bold text-[#1B1F4A]">{t}</span><span class="block text-sm text-[#4A4866]">{d}</span></span></li>
+          ))}
+          <li class="text-xs text-[#4A4866] pl-1">Figures from public vendor pages and reviews, as of 2026.</li>
+        </ul>
+      </div>
+    </section>
+
+    <!-- Setup -->
+    <section class="bg-[#FFFBF2]">
+      <div class="max-w-6xl mx-auto px-4 py-16 sm:py-20">
+        <h2 class="lp-h2 text-center">Inflated and taking bookings this afternoon.</h2>
+        <p class="mt-2 text-center text-lg text-[#4A4866]">Three steps. No “30 business days”.</p>
+        <ol class="mt-10 grid gap-5 md:grid-cols-3">
+          {[
+            ['Tell us about your business', 'Pick a look and the towns you serve. Your booking website and a page for every city publish instantly.'],
+            ['Add your inflatables', 'Photos, sizes, prices and setup needs — or send your spreadsheet or old site and we’ll import it.'],
+            ['Turn on growth', 'Switch on review requests and birthday re-books, schedule a week of posts, and launch a Search campaign.'],
+          ].map(([t, d], i) => (
+            <li class="lp-card relative pt-8">
+              <span class="lp-step">{i + 1}</span>
+              <h3 class="font-bold text-lg text-[#1B1F4A]">{t}</h3>
+              <p class="mt-1.5 text-sm text-[#4A4866] leading-relaxed">{d}</p>
+            </li>
+          ))}
+        </ol>
+      </div>
+    </section>
+
+    <!-- Migration -->
+    <section class="bg-white">
+      <div class="max-w-6xl mx-auto px-4 py-6 sm:py-10">
+        <div class="lp-switch">
+          <div>
+            <p class="lp-kicker text-[#FFD43B]">Switching software?</p>
+            <h2 class="lp-h2 mt-2 !text-white">Move without losing your Google rankings.</h2>
+            <p class="mt-3 text-white/85 max-w-lg">Fear of losing traffic keeps operators stuck on software they’ve outgrown. Every old URL gets a permanent redirect to its new home, your titles and structured data carry over, and you schedule the move for your off-season.</p>
+            <a href="/signup" class="lp-cta mt-6">Plan my move <Icon name="arrow" size={18} /></a>
+          </div>
+          <ul class="space-y-2.5">
+            {['Import from InflatableOffice, Event Rental Systems, WordPress or a spreadsheet', 'URL-by-URL 301 redirect map from your old sitemap', 'Your domain, your content, full export any time', 'Before/after Search Console check-in'].map((x) => (
+              <li class="flex gap-2.5 rounded-2xl bg-white/12 ring-1 ring-white/20 px-4 py-3 text-sm font-medium text-white"><Icon name="check" size={18} class="shrink-0 text-[#FFD43B]" />{x}</li>
+            ))}
+          </ul>
+        </div>
+      </div>
+    </section>
+
+    <!-- Pricing -->
+    <section class="bg-white">
+      <div class="max-w-6xl mx-auto px-4 py-16 sm:py-20">
+        <div class="flex flex-wrap items-end gap-4">
+          <div>
+            <h2 class="lp-h2">Buy another bounce house. Your bill doesn’t move.</h2>
+            <p class="mt-2 text-lg text-[#4A4866]">Flat monthly pricing with unlimited rentals on every plan.</p>
+          </div>
+          <a href="/pricing" class="lp-ghost ml-auto">Compare plans &amp; fees</a>
+        </div>
+        <div class="mt-9 grid gap-5 md:grid-cols-3">
+          {plans.map((p) => (
+            <div class:list={['lp-card flex flex-col', p.id === 'pro' && 'lp-card-pop']}>
+              {p.id === 'pro' && <span class="lp-badge">Most popular</span>}
+              <h3 class="lp-h3">{p.name}</h3>
+              <p class="mt-1"><span class="text-4xl font-bold text-[#1B1F4A] tabular-nums lp-num">{money(p.monthlyCents)}</span><span class="text-[#4A4866]">/mo</span></p>
+              <p class="text-sm text-[#4A4866]">+ {pct(p.platformFeeBps)} on online payments</p>
+              <ul class="mt-4 space-y-2 text-sm text-[#2A3160] flex-1">
+                {p.features.slice(0, 6).map((f) => <li class="flex gap-2"><Icon name="check" size={16} class="mt-0.5 shrink-0 text-[#15803D]" />{f}</li>)}
+              </ul>
+              <a href={`/signup?plan=${p.id}`} class:list={['mt-5 w-full', p.id === 'pro' ? 'lp-cta justify-center' : 'lp-ghost justify-center']}>Start with {p.name}</a>
+            </div>
+          ))}
+        </div>
+      </div>
+    </section>
+
+    <!-- FAQ -->
+    <section class="bg-[#FFFBF2]">
+      <div class="max-w-3xl mx-auto px-4 py-16 sm:py-20">
+        <h2 class="lp-h2 text-center">Questions operators ask</h2>
+        <div class="mt-8 space-y-3">
+          {faqs.map((f) => (
+            <details class="lp-faq">
+              <summary>{f.q}<Icon name="plus" size={18} class="lp-faq-ico" /></summary>
+              <p>{f.a}</p>
+            </details>
+          ))}
+        </div>
+      </div>
+    </section>
+
+    <!-- Final CTA: back in the yard -->
+    <section class="lp-final">
+      <div class="max-w-4xl mx-auto px-4 pt-16 pb-28 text-center relative z-10">
+        <h2 class="lp-h1 !text-[2.4rem] sm:!text-6xl">Make this the summer you stop turning parties away.</h2>
+        <p class="mt-4 text-lg text-[#2A3160]">30-day free trial. No card to start. Month to month.</p>
+        <div class="mt-7 flex flex-wrap justify-center gap-3">
+          <a href="/signup" class="lp-cta">Start free <Icon name="arrow" size={18} /></a>
+          <a href="/find" class="lp-ghost">Looking to rent? Find a company</a>
+        </div>
+      </div>
+      <svg class="lp-grass" viewBox="0 0 1440 90" preserveAspectRatio="none" aria-hidden="true"><path d="M0 50 Q180 0 360 38 T720 34 T1080 40 T1440 26 V90 H0Z" fill="#4BB35C" /><path d="M0 70 Q240 36 480 62 T960 58 T1440 60 V90 H0Z" fill="#3FA552" /></svg>
+    </section>
+  </div>
+
+  <script>
+    const btns = document.querySelectorAll<HTMLButtonElement>('[data-theme-btn]');
+    const imgs = document.querySelectorAll<HTMLImageElement>('.lp-theme-img');
+    btns.forEach((b) => b.addEventListener('click', () => {
+      btns.forEach((x) => x.setAttribute('aria-pressed', String(x === b)));
+      imgs.forEach((i) => i.classList.toggle('is-on', i.dataset.theme === b.dataset.themeBtn));
+    }));
+  </script>
 </PlatformLayout>
+
+<style>
+  .lp { --lp-ink: #1B1F4A; --lp-display: 'Fredoka', 'Bricolage Grotesque', ui-rounded, system-ui, sans-serif; color: var(--lp-ink); }
+  .lp :global(h1), .lp :global(h2), .lp :global(h3) { font-family: var(--lp-display); letter-spacing: -0.01em; }
+  .lp-num { font-family: var(--lp-display); }
+  .lp-hero { position: relative; overflow: hidden; background: linear-gradient(180deg, #9ADBFF 0%, #D9F1FF 62%, #F3FBFF 100%); padding-bottom: 5.5rem; }
+  .lp-final { position: relative; overflow: hidden; background: linear-gradient(180deg, #D9F1FF 0%, #9ADBFF 100%); }
+  .lp-grass { position: absolute; left: 0; right: 0; bottom: -1px; width: 100%; height: 70px; display: block; }
+  .lp-eyebrow { display: inline-flex; align-items: center; gap: .5rem; border-radius: 999px; background: #fff; padding: .4rem .9rem; font-size: .85rem; font-weight: 700; color: var(--lp-ink); box-shadow: 0 2px 0 rgba(27,31,74,.12); }
+  .lp-h1 { font-size: clamp(2.6rem, 6.4vw, 4.6rem); line-height: 1.02; font-weight: 700; color: var(--lp-ink); }
+  .lp-h2 { font-size: clamp(1.8rem, 3.6vw, 2.75rem); line-height: 1.1; font-weight: 700; color: var(--lp-ink); }
+  .lp-h3 { font-size: 1.3rem; font-weight: 700; color: var(--lp-ink); }
+  .lp-mark { background: linear-gradient(transparent 62%, #FFD43B 62%, #FFD43B 92%, transparent 92%); padding: 0 .1em; }
+  .lp-kicker { font-weight: 800; font-size: .8rem; letter-spacing: .08em; text-transform: uppercase; }
+  .lp-cta, .lp-ghost { display: inline-flex; align-items: center; gap: .5rem; min-height: 3.25rem; padding: 0 1.4rem; border-radius: 999px; font-weight: 700; font-size: 1rem; transition: transform .12s ease, box-shadow .12s ease; }
+  .lp-cta { background: #FF5A1F; color: #1B1F4A; box-shadow: 0 5px 0 #C2410C; }
+  .lp-cta:hover { transform: translateY(2px); box-shadow: 0 3px 0 #C2410C; }
+  .lp-ghost { background: #fff; color: var(--lp-ink); box-shadow: 0 5px 0 rgba(27,31,74,.16); }
+  .lp-ghost:hover { transform: translateY(2px); box-shadow: 0 3px 0 rgba(27,31,74,.16); }
+  .lp :global(.lp-scene) { border-radius: 36px; box-shadow: 0 24px 50px -18px rgba(27,31,74,.45); border: 6px solid #fff; }
+  .lp-toast { position: absolute; display: flex; align-items: center; gap: .65rem; background: #fff; border-radius: 18px; padding: .6rem .9rem .6rem .6rem; font-size: .8rem; line-height: 1.25; color: var(--lp-ink); box-shadow: 0 10px 26px -8px rgba(27,31,74,.4); animation: lp-float 5s ease-in-out infinite alternate; }
+  .lp-toast-ico { display: grid; place-items: center; width: 2rem; height: 2rem; border-radius: 12px; flex-shrink: 0; }
+  .lp-toast-1 { top: 6%; left: -3%; }
+  .lp-toast-2 { top: 44%; right: -3%; animation-delay: -1.6s; }
+  .lp-toast-3 { bottom: 5%; left: 6%; animation-delay: -3.1s; }
+  @keyframes lp-float { from { transform: translateY(-4px); } to { transform: translateY(5px); } }
+  .lp-browser { border-radius: 22px; overflow: hidden; background: #fff; border: 3px solid var(--lp-ink); box-shadow: 8px 8px 0 var(--lp-ink); position: relative; }
+  .lp-browser-bar { display: flex; align-items: center; gap: .4rem; padding: .6rem .9rem; background: var(--lp-ink); color: #fff; font-size: .75rem; font-weight: 600; }
+  .lp-browser-bar i { width: .65rem; height: .65rem; border-radius: 999px; background: #FF5A1F; }
+  .lp-browser-bar i:nth-child(2) { background: #FFD43B; } .lp-browser-bar i:nth-child(3) { background: #4BB35C; }
+  .lp-browser-bar span { margin-left: .6rem; opacity: .85; }
+  .lp-browser img { display: block; width: 100%; height: auto; }
+  .lp-theme-img { display: none !important; } .lp-theme-img.is-on { display: block !important; }
+  .lp-theme-btn { min-height: 2.75rem; padding: 0 1rem; border-radius: 999px; background: #fff; border: 2px solid var(--lp-ink); font-weight: 700; font-size: .85rem; color: var(--lp-ink); cursor: pointer; }
+  .lp-theme-btn[aria-pressed='true'] { background: var(--lp-ink); color: #fff; }
+  .lp-phone { width: 230px; max-width: 70vw; }
+  .lp-phone img { display: block; width: 100%; height: auto; aspect-ratio: 9 / 17; object-fit: cover; object-position: top; border-radius: 30px; border: 8px solid var(--lp-ink); box-shadow: 8px 8px 0 #FF5A1F; background: #fff; }
+  .lp-card { background: #fff; border: 2px solid #E7E3F5; border-radius: 22px; padding: 1.25rem; position: relative; }
+  .lp-card-ico { display: grid; place-items: center; width: 2.75rem; height: 2.75rem; border-radius: 14px; }
+  .lp-card-pop { border-color: var(--lp-ink); box-shadow: 6px 6px 0 #FFD43B; }
+  .lp-badge { position: absolute; top: -0.8rem; left: 1.1rem; background: var(--lp-ink); color: #fff; font-size: .72rem; font-weight: 800; padding: .25rem .7rem; border-radius: 999px; }
+  .lp-pillar { background: #fff; border-radius: 24px; padding: 1.5rem; border: 2px solid #CFE6F7; }
+  .lp-step { position: absolute; top: -1.1rem; left: 1.1rem; display: grid; place-items: center; width: 2.4rem; height: 2.4rem; border-radius: 999px; background: #FFD43B; color: var(--lp-ink); font-family: var(--lp-display); font-weight: 700; font-size: 1.15rem; border: 3px solid var(--lp-ink); }
+  .lp-switch { display: grid; gap: 2rem; align-items: center; border-radius: 32px; padding: 2rem; background: #1D4ED8; background-image: radial-gradient(circle at 92% 110%, #FF5A1F 0, #FF5A1F 18%, transparent 18.5%), radial-gradient(circle at 104% 30%, #FFD43B 0, #FFD43B 12%, transparent 12.5%); }
+  @media (min-width: 1024px) { .lp-switch { grid-template-columns: 1.05fr .95fr; padding: 3rem; } }
+  .lp-faq { background: #fff; border: 2px solid #EFE7D6; border-radius: 18px; padding: 0 1.1rem; }
+  .lp-faq summary { display: flex; align-items: center; justify-content: space-between; gap: 1rem; min-height: 3.5rem; font-weight: 700; cursor: pointer; list-style: none; color: var(--lp-ink); }
+  .lp-faq summary::-webkit-details-marker { display: none; }
+  .lp-faq :global(.lp-faq-ico) { flex-shrink: 0; transition: transform .15s ease; }
+  .lp-faq[open] :global(.lp-faq-ico) { transform: rotate(45deg); }
+  .lp-faq p { padding: 0 0 1.1rem; color: #4A4866; line-height: 1.6; }
+  @media (max-width: 1023px) { .lp-toast-1 { left: 2%; } .lp-toast-2 { right: 2%; } }
+  @media (max-width: 480px) { .lp-toast { font-size: .7rem; padding: .45rem .7rem .45rem .45rem; } .lp-toast-3 { display: none; } }
+  @media (prefers-reduced-motion: reduce) { .lp-toast { animation: none; } .lp-cta, .lp-ghost { transition: none; } }
+</style>
