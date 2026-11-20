@@ -1,0 +1,29 @@
+---
+import type { SiteCtx } from '../../../lib/site/data';
+import { minPrice } from '../../../lib/site/data';
+import { money } from '../../../lib/pricing';
+interface Props { ctx: SiteCtx; props: Record<string, unknown> }
+const { ctx, props: p } = Astro.props;
+const cats = ctx.categories.map((c) => ({ c, items: ctx.items.filter((i) => i.categoryId === c.id && i.kind !== 'package') })).filter((x) => x.items.length).slice(0, 8);
+---
+{cats.length > 0 && (
+<section class="s-wrap s-section">
+  <div class="flex flex-wrap items-end justify-between gap-4">
+    <h2 class="s-h2">{String(p.title ?? 'Shop by category')}</h2>
+    <a href={ctx.href('/rentals')} class="font-extrabold text-primary hover:underline min-h-11 inline-flex items-center">All rentals →</a>
+  </div>
+  <ul class="mt-8 grid grid-cols-2 lg:grid-cols-4 gap-3 sm:gap-5">
+    {cats.map(({ c, items }, i) => (
+      <li>
+        <a href={ctx.href(`/rentals/${c.slug}`)} class="s-card s-pcard group block h-full">
+          <div class="s-pimg !aspect-[5/4]"><img src={items.find((x) => x.featured)?.images[0] ?? items[0].images[0] ?? '/demo/hero.svg'} alt="" width="800" height="600" loading={i < 4 ? 'eager' : 'lazy'} /></div>
+          <div class="p-4 flex items-end justify-between gap-2">
+            <span class="min-w-0"><span class="block font-display font-bold text-[1.05rem] leading-tight">{c.name}</span><span class="block text-xs s-sub mt-1 font-semibold">{items.length} rental{items.length === 1 ? '' : 's'}</span></span>
+            <span class="s-sticker text-xs shrink-0"><span class="text-[10px] font-bold uppercase">from</span><span class="s-price text-base">{money(minPrice(items) ?? 0)}</span></span>
+          </div>
+        </a>
+      </li>
+    ))}
+  </ul>
+</section>
+)}

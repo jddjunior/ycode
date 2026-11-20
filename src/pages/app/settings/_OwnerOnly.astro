@@ -1,0 +1,10 @@
+---
+import Icon from '../../../components/Icon.astro';
+interface Props { what: string }
+---
+<div class="card p-10 text-center">
+  <span class="mx-auto grid place-items-center size-14 rounded-2xl bg-canvas text-ink-2"><Icon name="shield" size={26} /></span>
+  <h2 class="font-bold text-lg mt-3">Only the account owner can manage {Astro.props.what}</h2>
+  <p class="text-sm text-ink-2 mt-1">Ask the owner to make the change, or to upgrade your role in Team & crew.</p>
+  <a href="/app/settings" class="btn-ghost mt-4">Back to settings</a>
+</div>

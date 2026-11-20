@@ -1,0 +1,6 @@
+---
+/** Inline field error. Pair the input with aria-describedby={id} and aria-invalid. */
+interface Props { msg?: string; id: string }
+const { msg, id } = Astro.props;
+---
+{msg && <p id={id} class="mt-1 text-xs font-semibold text-red-700 flex items-center gap-1" role="alert">⚠ {msg}</p>}

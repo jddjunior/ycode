@@ -1,0 +1,16 @@
+---
+/** Breadcrumb trail. Last item is the current page. */
+import Icon from '../Icon.astro';
+interface Props { items: { label: string; href?: string }[] }
+const { items } = Astro.props;
+---
+<nav aria-label="Breadcrumb" class="mb-2 text-sm">
+  <ol class="flex flex-wrap items-center gap-1 text-ink-2">
+    {items.map((c, i) => (
+      <li class="flex items-center gap-1 min-w-0">
+        {i > 0 && <Icon name="arrow" size={12} class="opacity-40 shrink-0" />}
+        {c.href && i < items.length - 1 ? <a href={c.href} class="hover:text-brand hover:underline underline-offset-2 truncate">{c.label}</a> : <span aria-current="page" class="font-semibold text-ink truncate">{c.label}</span>}
+      </li>
+    ))}
+  </ol>
+</nav>

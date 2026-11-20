@@ -1,0 +1,114 @@
+---
+import SiteLayout from '../../../../layouts/SiteLayout.astro';
+import ProductCard from '../../../../components/site/ProductCard.astro';
+import SearchBox from '../../../../components/site/SearchBox.astro';
+import DateBanner from '../../../../components/site/DateBanner.astro';
+import Breadcrumbs from '../../../../components/site/Breadcrumbs.astro';
+import { loadSiteCtx, ssrAvailability, fitsAge, AGE_FILTERS, minPrice, type Item } from '../../../../lib/site/data';
+import { breadcrumbLd } from '../../../../lib/seo';
+import { money } from '../../../../lib/pricing';
+
+const ctx = await loadSiteCtx(Astro.locals, Astro.params.tenant);
+if (!ctx) return new Response('Not found', { status: 404 });
+const t = ctx.tenant;
+const q = Astro.url.searchParams;
+const type = q.get('type') === 'wet' || q.get('type') === 'dry' ? q.get('type') : null;
+const age = Number.parseInt(q.get('age') ?? '', 10);
+const cat = ctx.categories.find((c) => c.slug === q.get('cat')) ?? null;
+const av = await ssrAvailability(t, Astro.url);
+const freeOf = (i: Item) => (av ? (av.res.ok ? Math.max(0, av.res.free[i.id] ?? 0) : 0) : null);
+
+let rentals = ctx.items.filter((i) => i.kind === 'rental');
+if (cat) rentals = rentals.filter((i) => i.categoryId === cat.id);
+if (type) rentals = rentals.filter((i) => (type === 'wet' ? i.isWet : !i.isWet));
+if (Number.isFinite(age)) rentals = rentals.filter((i) => fitsAge(i, age));
+if (av?.res.ok) rentals = [...rentals].sort((a, b) => Number((freeOf(b) ?? 0) > 0) - Number((freeOf(a) ?? 0) > 0));
+const addons = ctx.items.filter((i) => i.kind === 'addon');
+const packages = ctx.items.filter((i) => i.kind === 'package');
+const open = av?.res.ok ? ctx.items.filter((i) => i.kind !== 'addon' && (freeOf(i) ?? 0) > 0).length : 0;
+
+const keep = ['date', 'start', 'end', 'zip', 'type', 'age', 'cat'];
+const qs = (o: Record<string, string | null>) => {
+  const u = new URLSearchParams();
+  for (const k of keep) { const v = k in o ? o[k] : q.get(k); if (v) u.set(k, v); }
+  const s = u.toString();
+  return ctx.href('/rentals') + (s ? `?${s}` : '');
+};
+const catsWithItems = ctx.categories.filter((c) => ctx.items.some((i) => i.categoryId === c.id && i.kind === 'rental'));
+const floor = minPrice(ctx.items.filter((i) => i.kind === 'rental'));
+const crumbs = [{ name: 'Home', url: ctx.abs('/') }, { name: 'Rentals', url: ctx.abs('/rentals') }];
+const itemList = { '@context': 'https://schema.org', '@type': 'ItemList', itemListElement: ctx.items.filter((i) => i.kind === 'rental').map((i, n) => ({ '@type': 'ListItem', position: n + 1, url: ctx.abs(ctx.itemPath(i)), name: i.name })) };
+---
+<SiteLayout ctx={ctx} title={`Bounce House & Party Rentals ${t.city}, ${t.state}${floor ? ` — From ${money(floor)}` : ''}`}
+  description={`Browse every bounce house, combo, water slide and party extra we rent in ${t.city}. Pick your date to see live availability — delivery, setup and pickup included.`}
+  ld={[breadcrumbLd(crumbs), itemList]}>
+  <section class="s-hero-bg">
+    <div class="s-wrap pt-8 pb-10">
+      <Breadcrumbs crumbs={[{ name: 'Home', href: ctx.href('/') }, { name: 'Rentals' }]} />
+      <div class="mt-5 grid lg:grid-cols-[1fr_1.1fr] gap-8 items-end">
+        <div>
+          <h1 class="s-h1 !text-[clamp(2rem,5vw,3.4rem)]">Party rentals in {t.city}</h1>
+          <p class="s-lede mt-3 max-w-xl">Every price includes delivery, setup and pickup. Start with your date — we only show what’s actually free.</p>
+        </div>
+        <div id="check" class="s-card p-4 sm:p-5 scroll-mt-28">
+          <SearchBox ctx={ctx} id="hub" submitLabel="Show available rentals" initial={av ? { day: av.day, startHour: av.startHour, endHour: av.endHour, zip: av.zip } : undefined} />
+        </div>
+      </div>
+      {av && <div class="mt-6"><DateBanner av={av} open={open} /></div>}
+    </div>
+  </section>
+
+  <section class="s-wrap py-10">
+    <div class="flex flex-col gap-3">
+      <div class="flex gap-2 overflow-x-auto pb-1 -mx-4 px-4 sm:mx-0 sm:px-0 sm:flex-wrap" aria-label="Category">
+        <a href={qs({ cat: null })} class="s-filter shrink-0" aria-current={!cat ? 'true' : undefined}>All</a>
+        {catsWithItems.map((c) => <a href={qs({ cat: c.slug })} class="s-filter shrink-0" aria-current={cat?.id === c.id ? 'true' : undefined}>{c.name}</a>)}
+      </div>
+      <div class="flex flex-wrap items-center gap-2">
+        <a href={qs({ type: null })} class="s-filter" aria-current={!type ? 'true' : undefined}>Wet & dry</a>
+        <a href={qs({ type: 'dry' })} class="s-filter" aria-current={type === 'dry' ? 'true' : undefined}>☀️ Dry only</a>
+        <a href={qs({ type: 'wet' })} class="s-filter" aria-current={type === 'wet' ? 'true' : undefined}>💧 Water</a>
+        <form method="get" action={ctx.href('/rentals')} class="flex items-center gap-2 ml-auto">
+          {keep.filter((k) => k !== 'age' && q.get(k)).map((k) => <input type="hidden" name={k} value={q.get(k) ?? ''} />)}
+          <label for="age" class="text-sm font-bold">Ages</label>
+          <select id="age" name="age" class="s-input !min-h-11 !w-auto" onchange="this.form.submit()">
+            <option value="">Any age</option>
+            {AGE_FILTERS.map((a) => <option value={a.v} selected={age === a.v}>{a.label}</option>)}
+          </select>
+          <noscript><button class="s-btn s-btn-ghost s-btn-sm">Apply</button></noscript>
+        </form>
+      </div>
+    </div>
+
+    <h2 class="sr-only">Rentals</h2>
+    {rentals.length ? (
+      <div class="mt-8 grid grid-cols-1 min-[480px]:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4 sm:gap-5">
+        {rentals.map((it, i) => <ProductCard ctx={ctx} item={it} free={freeOf(it)} dayLabel={av?.dayLabel} eager={i < 4} />)}
+      </div>
+    ) : (
+      <div class="mt-8 s-tile p-8 text-center">
+        <p class="font-display text-xl font-bold">Nothing matches those filters</p>
+        <a href={qs({ type: null, age: null, cat: null })} class="mt-4 s-btn s-btn-ghost">Clear filters</a>
+      </div>
+    )}
+  </section>
+
+  {packages.length > 0 && (
+    <section class="s-wrap pb-6">
+      <a href={ctx.href('/rentals/packages')} class="s-band rounded-[var(--r-card)] p-6 sm:p-8 flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+        <span><span class="block font-display text-2xl font-bold">Party packages</span><span class="block opacity-90 mt-1">{packages.length} bundles that save you money — bounce + treats + shade.</span></span>
+        <span class="s-btn s-btn-cta">See packages →</span>
+      </a>
+    </section>
+  )}
+
+  {addons.length > 0 && (
+    <section class="s-wrap s-section !pt-10">
+      <h2 class="s-h2 !text-3xl">Add-ons & extras</h2>
+      <p class="s-sub mt-2 font-semibold">Add these to any rental at checkout.</p>
+      <div class="mt-6 grid grid-cols-1 min-[480px]:grid-cols-2 lg:grid-cols-4 gap-4">
+        {addons.map((it) => <ProductCard ctx={ctx} item={it} free={freeOf(it)} dayLabel={av?.dayLabel} />)}
+      </div>
+    </section>
+  )}
+</SiteLayout>

@@ -1,0 +1,17 @@
+---
+import type { SiteCtx } from '../../../lib/site/data';
+import SearchBox from '../SearchBox.astro';
+interface Props { ctx: SiteCtx; props: Record<string, unknown>; idx: number }
+const { ctx, props: p, idx } = Astro.props;
+---
+<section class="s-wrap pb-16 md:pb-24 pt-4">
+  <div class="s-band rounded-[calc(var(--r-card)*1.4)] p-6 sm:p-10 lg:p-12 grid lg:grid-cols-[.8fr_1.2fr] gap-8 items-center relative overflow-hidden">
+    <div>
+      <h2 class="s-h2">{String(p.headline ?? 'Weekend dates go fast')}</h2>
+      {p.text && <p class="mt-3 text-lg opacity-90">{String(p.text)}</p>}
+    </div>
+    <div class="s-card !text-ink p-4 sm:p-5">
+      <SearchBox ctx={ctx} id={`cta${idx}`} submitLabel={String(p.button ?? 'Check availability')} />
+    </div>
+  </div>
+</section>

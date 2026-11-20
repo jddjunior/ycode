@@ -1,0 +1,154 @@
+---
+import { z } from 'zod';
+import PlatformLayout from '../../layouts/PlatformLayout.astro';
+import Icon from '../../components/Icon.astro';
+import Enhance from '../../components/growth/Enhance.astro';
+import { formData, str, int, clientIp } from '../../lib/forms';
+import { rateLimit } from '../../lib/ratelimit';
+import { money } from '../../lib/pricing';
+import { platformUrl } from '../../lib/tenant';
+import { isValidDay, addDays } from '../../lib/time';
+import { operatorsForZip, routeQuoteRequest } from '../../lib/growth/marketplace';
+
+const zip = Astro.params.zip ?? '';
+if (!/^\d{5}$/.test(zip)) return Astro.redirect(`/find?zip=${encodeURIComponent(zip.slice(0, 10))}`, 302);
+
+const WANTS = ['Bounce house', 'Combo with slide', 'Water slide', 'Obstacle course', 'Interactive games', 'Tent, tables & chairs', 'Concessions'];
+const today = new Date().toISOString().slice(0, 10);
+const Lead = z.object({
+  name: z.string().trim().min(2, 'Please tell us your name').max(100),
+  email: z.email('Enter a valid email so operators can reply').max(200),
+  phone: z.string().trim().max(30).regex(/^[\d\s()+.-]*$/, 'Use digits only'),
+  eventDate: z.string().refine((d) => isValidDay(d) && d >= today && d <= addDays(today, 730), 'Pick an upcoming event date'),
+  guests: z.number().int().min(0).max(5000).nullable(),
+  wants: z.array(z.enum(WANTS as [string, ...string[]])).max(WANTS.length),
+  message: z.string().trim().max(1000),
+});
+
+let errors: Record<string, string> = {};
+let values: Record<string, string> = {};
+let wantsSel: string[] = [];
+const f = await formData(Astro);
+if (f) {
+  values = { name: str(f, 'name', 100), email: str(f, 'email', 200).toLowerCase(), phone: str(f, 'phone', 30), eventDate: str(f, 'eventDate', 10), guests: str(f, 'guests', 6), message: str(f, 'message', 1000) };
+  wantsSel = f.getAll('wants').map(String).filter((w) => WANTS.includes(w));
+  if (str(f, 'website', 100)) return Astro.redirect(`/find/${zip}?sent=0`, 303); // honeypot
+  const ip = clientIp(Astro.request, Astro.clientAddress);
+  if (!rateLimit(`mkt:${ip}`, 4, 0.5) || !rateLimit(`mkt-email:${values.email}`, 3, 0.2)) {
+    errors._ = 'You’ve sent a few requests already — please wait a few minutes and try again.';
+  } else {
+    const r = Lead.safeParse({ ...values, guests: values.guests ? int(f, 'guests', 0) : null, wants: wantsSel });
+    if (!r.success) {
+      for (const i of r.error.issues) errors[String(i.path[0] ?? '_')] ??= i.message;
+    } else {
+      const { operators } = await routeQuoteRequest({ ...r.data, zip });
+      return Astro.redirect(`/find/${zip}?sent=${operators.length}`, 303);
+    }
+  }
+  Astro.response.status = 422;
+}
+
+const ops = await operatorsForZip(zip, 12);
+const sentRaw = Astro.url.searchParams.get('sent');
+const sent = sentRaw != null ? Math.max(0, Math.min(3, Number.parseInt(sentRaw, 10) || 0)) : null;
+const url = `${platformUrl()}/find/${zip}`;
+const ld = [{
+  '@context': 'https://schema.org', '@type': 'ItemList', name: `Bounce house rentals delivering to ${zip}`, url, numberOfItems: ops.length,
+  itemListElement: ops.map((o, i) => ({
+    '@type': 'ListItem', position: i + 1, url: o.origin + '/',
+    item: { '@type': 'LocalBusiness', name: o.tenant.name, url: o.origin + '/', telephone: o.tenant.phone || undefined, address: { '@type': 'PostalAddress', addressLocality: o.tenant.city, addressRegion: o.tenant.state, addressCountry: 'US' } },
+  })),
+}, { '@context': 'https://schema.org', '@type': 'BreadcrumbList', itemListElement: [{ '@type': 'ListItem', position: 1, name: 'Find a rental', item: platformUrl() + '/find' }, { '@type': 'ListItem', position: 2, name: zip, item: url }] }];
+const err = (k: string): { 'aria-invalid'?: 'true'; 'aria-describedby'?: string } => (errors[k] ? { 'aria-invalid': 'true', 'aria-describedby': `${k}-err` } : {});
+const cityName = ops[0]?.tenant.zip === zip ? ops[0].tenant.city : null;
+---
+<PlatformLayout title={`Bounce House Rentals Near ${zip}${cityName ? ` (${cityName})` : ''} — Compare & Get Quotes | BounceOS`} description={`${ops.length || 'No'} local bounce house, water slide and party rental compan${ops.length === 1 ? 'y delivers' : 'ies deliver'} to ${zip}. Compare reviews and prices, then request free quotes from up to 3 in one step.`} ld={ld}>
+  <Enhance />
+  <section class="bg-ink text-white">
+    <div class="max-w-6xl mx-auto px-4 py-10 sm:py-14">
+      <nav aria-label="Breadcrumb" class="text-xs text-white/60"><a href="/find" class="hover:text-white">Find a rental</a> <span aria-hidden="true">/</span> <span class="text-white">{zip}</span></nav>
+      <h1 class="mt-3 text-3xl sm:text-5xl font-extrabold text-white">Bounce house rentals near {zip}</h1>
+      <p class="mt-2 text-white/70">{ops.length ? `${ops.length} insured local compan${ops.length === 1 ? 'y delivers' : 'ies deliver'} to your ZIP.` : 'We’re still growing in your area.'}</p>
+      <form method="get" action="/find" class="mt-5 flex max-w-sm gap-2" role="search">
+        <label class="sr-only" for="zip">Change ZIP</label>
+        <input id="zip" name="zip" inputmode="numeric" pattern="\d{5}" maxlength="5" value={zip} class="input bg-white text-ink" />
+        <button class="btn-pop shrink-0">Update</button>
+      </form>
+      <a href="#quote-h" class="lg:hidden mt-4 inline-flex items-center gap-2 text-sm font-semibold text-sun underline underline-offset-4">Skip the browsing — get free quotes ↓</a>
+    </div>
+  </section>
+
+  <div class="max-w-6xl mx-auto px-4 py-10 grid gap-8 lg:grid-cols-[1fr_380px]">
+    <section aria-labelledby="ops-h" class="min-w-0">
+      <h2 id="ops-h" class="sr-only">Rental companies</h2>
+      {sent !== null && (
+        <div class="card p-5 mb-6 border-mint/40 bg-green-50" role="status">
+          <p class="font-extrabold text-lg text-green-900 flex items-center gap-2"><Icon name="check" size={20} />{sent ? `Request sent to ${sent} operator${sent === 1 ? '' : 's'}!` : 'Request received!'}</p>
+          <p class="text-sm text-green-900/80 mt-1">{sent ? 'Expect replies by email or phone — usually the same day. Popular weekend dates go fast, so reply to the first quote that fits.' : 'No operators deliver to your ZIP yet. We’ll let you know as soon as one joins.'}</p>
+          {sent > 0 && <p class="text-sm text-green-900/80 mt-2">Want it booked now? Check live availability on their sites below.</p>}
+        </div>
+      )}
+      {ops.length === 0 ? (
+        <div class="card p-8 text-center">
+          <span class="mx-auto grid place-items-center size-14 rounded-2xl bg-brand-soft text-brand"><Icon name="map" size={26} /></span>
+          <p class="mt-3 text-lg font-extrabold">No operators deliver to {zip} yet</p>
+          <p class="text-sm text-ink-2 mt-1 max-w-md mx-auto">Leave a request anyway — we’ll pass it to the closest companies as they join. Or try a nearby ZIP.</p>
+        </div>
+      ) : (
+        <ol class="space-y-4">
+          {ops.map((o, i) => (
+            <li class="card overflow-hidden">
+              <div class="p-5 flex flex-wrap items-start gap-4">
+                <span class="grid place-items-center size-12 rounded-2xl bg-brand text-white font-extrabold text-lg shrink-0" aria-hidden="true">{o.tenant.name.slice(0, 1)}</span>
+                <div class="flex-1 min-w-48">
+                  <h3 class="text-xl font-extrabold leading-tight"><a href={o.storefront} class="hover:text-brand">{o.tenant.name}</a></h3>
+                  <p class="text-sm text-ink-2 mt-0.5">Based in {o.tenant.city}, {o.tenant.state} · {o.deliveryFeeCents ? `${money(o.deliveryFeeCents)} delivery to ${zip}` : `Free delivery to ${zip}`}</p>
+                  {o.rating != null && <p class="text-sm mt-1"><span class="text-sun" aria-hidden="true">★★★★★</span> <strong>{o.rating.toFixed(1)}</strong> <span class="text-ink-2">({o.reviewCount} review{o.reviewCount === 1 ? '' : 's'})</span></p>}
+                </div>
+                {i === 0 && o.tenant.plan === 'elite' && <span class="chip bg-sun/30 text-[#7A5200]">Featured</span>}
+              </div>
+              {o.items.length > 0 && (
+                <ul class="grid grid-cols-1 sm:grid-cols-3 gap-px bg-line border-t border-line">
+                  {o.items.map((it) => (
+                    <li class="bg-white"><a href={it.url} class="flex sm:block items-center gap-3 p-3 hover:bg-canvas">
+                      {it.image && <img src={it.image} alt={it.name} class="w-20 sm:w-full aspect-[4/3] object-cover rounded-xl bg-canvas" loading="lazy" width="320" height="240" />}
+                      <span class="block sm:mt-2"><span class="block text-sm font-semibold leading-tight">{it.name}</span><span class="block text-xs text-ink-2">from {money(it.priceCents)}</span></span>
+                    </a></li>
+                  ))}
+                </ul>
+              )}
+              <div class="px-5 py-3 border-t border-line flex flex-wrap gap-2 bg-canvas/50">
+                <a href={o.storefront} class="btn-primary min-h-10">Check availability <Icon name="arrow" size={16} /></a>
+                {o.tenant.phone && <a href={`tel:${o.tenant.phone.replace(/[^\d+]/g, '')}`} class="btn-ghost min-h-10"><Icon name="phone" size={16} />{o.tenant.phone}</a>}
+              </div>
+            </li>
+          ))}
+        </ol>
+      )}
+    </section>
+
+    <aside>
+      <form method="post" class="card p-5 space-y-3 lg:sticky lg:top-20" aria-labelledby="quote-h" novalidate>
+        <h2 id="quote-h" class="text-xl font-extrabold scroll-mt-24">Get free quotes</h2>
+        <p class="text-sm text-ink-2 -mt-1">One form, up to {Math.min(3, Math.max(ops.length, 1))} local operator{Math.min(3, ops.length) === 1 ? '' : 's'}. No spam, no account.</p>
+        {errors._ && <p role="alert" class="rounded-lg bg-red-50 text-red-800 text-sm px-3 py-2">{errors._}</p>}
+        <div class="hidden" aria-hidden="true"><label for="website">Website</label><input id="website" name="website" tabindex="-1" autocomplete="off" /></div>
+        <div><label class="label" for="name">Your name</label><input class="input" id="name" name="name" value={values.name} autocomplete="name" required maxlength="100" {...err('name')} />{errors.name && <p id="name-err" class="g-err">{errors.name}</p>}</div>
+        <div><label class="label" for="email">Email</label><input class="input" id="email" name="email" type="email" value={values.email} autocomplete="email" required maxlength="200" {...err('email')} />{errors.email && <p id="email-err" class="g-err">{errors.email}</p>}</div>
+        <div class="grid grid-cols-2 gap-2">
+          <div><label class="label" for="phone">Phone <span class="font-normal text-ink-2">(optional)</span></label><input class="input" id="phone" name="phone" type="tel" value={values.phone} autocomplete="tel" maxlength="30" {...err('phone')} />{errors.phone && <p id="phone-err" class="g-err">{errors.phone}</p>}</div>
+          <div><label class="label" for="guests">Kids/guests</label><input class="input" id="guests" name="guests" type="number" min="0" max="5000" value={values.guests} {...err('guests')} /></div>
+        </div>
+        <div><label class="label" for="eventDate">Event date</label><input class="input" id="eventDate" name="eventDate" type="date" min={today} value={values.eventDate} required {...err('eventDate')} />{errors.eventDate && <p id="eventDate-err" class="g-err">{errors.eventDate}</p>}</div>
+        <fieldset><legend class="label">What are you looking for?</legend>
+          <div class="flex flex-wrap gap-1.5">
+            {WANTS.map((w) => <label class="chip border border-line bg-white text-ink py-1.5 px-3 cursor-pointer has-[:checked]:bg-brand has-[:checked]:text-white has-[:checked]:border-brand has-[:focus-visible]:ring-2 has-[:focus-visible]:ring-brand/40"><input type="checkbox" name="wants" value={w} checked={wantsSel.includes(w)} class="sr-only" />{w}</label>)}
+          </div>
+        </fieldset>
+        <div><label class="label" for="message">Anything else?</label><textarea class="input" id="message" name="message" rows="3" maxlength="1000" placeholder="Backyard, 20 kids, 11am–4pm">{values.message}</textarea></div>
+        <button class="btn-pop w-full min-h-12 text-base" data-busy="Sending…">Request quotes</button>
+        <p class="text-xs text-ink-2">By submitting you agree that up to 3 listed operators may contact you about this event. <a href="/find" class="underline">How BounceOS works</a></p>
+      </form>
+    </aside>
+  </div>
+</PlatformLayout>

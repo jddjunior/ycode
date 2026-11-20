@@ -1,0 +1,14 @@
+---
+import type { SiteCtx } from '../../lib/site/data';
+interface Props { ctx: SiteCtx; what?: string }
+const { ctx, what = 'page' } = Astro.props;
+---
+<section class="s-wrap s-section text-center max-w-2xl">
+  <p class="s-eyebrow justify-center">404</p>
+  <h1 class="s-h2 mt-3">We couldn’t find that {what}</h1>
+  <p class="s-lede mt-4">It may have moved or been retired. Here’s where the fun is:</p>
+  <div class="mt-8 flex flex-wrap gap-3 justify-center">
+    <a class="s-btn s-btn-cta s-btn-lg" href={ctx.href('/rentals')}>Browse all rentals</a>
+    <a class="s-btn s-btn-ghost s-btn-lg" href={ctx.href('/')}>Home</a>
+  </div>
+</section>

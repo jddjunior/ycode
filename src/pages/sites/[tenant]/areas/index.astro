@@ -1,0 +1,57 @@
+---
+import SiteLayout from '../../../../layouts/SiteLayout.astro';
+import Breadcrumbs from '../../../../components/site/Breadcrumbs.astro';
+import Icon from '../../../../components/Icon.astro';
+import { loadSiteCtx, deliveryZones, smsHref } from '../../../../lib/site/data';
+import { breadcrumbLd } from '../../../../lib/seo';
+import { money } from '../../../../lib/pricing';
+
+const ctx = await loadSiteCtx(Astro.locals, Astro.params.tenant);
+if (!ctx) return new Response('Not found', { status: 404 });
+const t = ctx.tenant;
+const zones = await deliveryZones(t.id);
+const crumbs = [{ name: 'Home', url: ctx.abs('/') }, { name: 'Service areas', url: ctx.abs('/areas') }];
+---
+<SiteLayout ctx={ctx} title={`Service Areas — Bounce House Delivery near ${t.city}, ${t.state}`} description={`Where ${t.name} delivers: ${ctx.cities.slice(0, 6).map((c) => c.local?.city ?? c.title).join(', ')} and more. Delivery fees by ZIP, shown before checkout.`} ld={[breadcrumbLd(crumbs)]}>
+  <section class="s-hero-bg">
+    <div class="s-wrap pt-8 pb-12">
+      <Breadcrumbs crumbs={[{ name: 'Home', href: ctx.href('/') }, { name: 'Service areas' }]} />
+      <h1 class="s-h1 mt-5 !text-[clamp(2rem,5vw,3.4rem)] max-w-3xl">Where we deliver</h1>
+      <p class="s-lede mt-3 max-w-2xl">Based in {t.city}, {t.state}. Delivery, setup and pickup are included — your exact fee shows from your ZIP before you pay.</p>
+    </div>
+  </section>
+  <section class="s-wrap s-section !pt-6">
+    <ul class="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
+      {ctx.cities.map((c) => (
+        <li>
+          <a href={ctx.href(`/areas/${c.slug}`)} class="s-card s-pcard p-5 flex flex-col gap-2 h-full">
+            <span class="flex items-center gap-2 font-display text-xl font-bold"><Icon name="map" size={20} class="text-primary" />{c.local?.city ?? c.title}{c.local?.state ? `, ${c.local.state}` : ''}</span>
+            {c.local?.neighborhoods?.length ? <span class="text-sm s-sub">Including {c.local.neighborhoods.slice(0, 4).join(', ')}</span> : <span class="text-sm s-sub">Bounce houses, slides & party rentals</span>}
+            <span class="mt-auto pt-2 font-extrabold text-primary text-sm">See {c.local?.city ?? 'city'} rentals →</span>
+          </a>
+        </li>
+      ))}
+    </ul>
+    {zones.length > 0 && (
+      <div class="mt-12 grid lg:grid-cols-2 gap-6 items-start">
+        <div>
+          <h2 class="s-h2 !text-3xl">Delivery fees</h2>
+          <p class="s-sub mt-2">Fees cover the round trip, setup, anchoring and pickup.</p>
+          <table class="mt-5 w-full text-sm s-card overflow-hidden">
+            <thead><tr class="text-left"><th class="p-3">Zone</th><th class="p-3">ZIP codes</th><th class="p-3 text-right">Fee</th></tr></thead>
+            <tbody>
+              {zones.map((z) => (
+                <tr class="border-t border-line"><td class="p-3 font-bold">{z.name}</td><td class="p-3 s-sub">{z.zips.length ? z.zips.join(', ') : z.radiusMiles ? `Within ${z.radiusMiles} miles` : '—'}</td><td class="p-3 text-right s-price">{z.feeCents ? money(z.feeCents) : 'Free'}{z.minOrderCents ? <span class="block text-xs s-sub font-semibold">{money(z.minOrderCents)} min</span> : null}</td></tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+        <div class="s-tile p-6">
+          <p class="font-display text-xl font-bold">Not listed?</p>
+          <p class="s-sub mt-1">We often deliver a little farther for bigger orders and schools. Text us your ZIP and date.</p>
+          {t.phone && <a href={smsHref(t.phone, 'Hi! Do you deliver to ZIP ')} class="mt-4 s-btn s-btn-primary">Text us your ZIP</a>}
+        </div>
+      </div>
+    )}
+  </section>
+</SiteLayout>

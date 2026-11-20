@@ -1,0 +1,328 @@
+---
+/** Booking detail: lines, money, status, payments, messaging, crew, notes, agreement, attribution. */
+import { and, desc, eq } from 'drizzle-orm';
+import { z } from 'zod';
+import AppLayout from '../../../layouts/AppLayout.astro';
+import Icon from '../../../components/Icon.astro';
+import StatusChip from '../../../components/ops/StatusChip.astro';
+import WeatherBadge from '../../../components/ops/WeatherBadge.astro';
+import Crumbs from '../../../components/ops/Crumbs.astro';
+import NextSteps from '../../../components/ops/NextSteps.astro';
+import SubmitGuard from '../../../components/ops/SubmitGuard.astro';
+import { getDb, schema } from '../../../db/client';
+import { money } from '../../../lib/pricing';
+import { bookingWithLines, recordPayment } from '../../../lib/booking';
+import { onBookingPayment } from '../../../lib/revenue';
+import { send } from '../../../lib/notify';
+import { siteOrigin } from '../../../lib/tenant';
+import { formData, str, cents, flash, parse } from '../../../lib/forms';
+import { opsCtx, isUuid, dateTime, dateOnly, time, localDay, fullAddress, mapsLink, CHANNELS, dayTitle } from '../../../lib/ops/ctx';
+import { weatherFor, CHECKLIST } from '../../../lib/ops/stops';
+import { logActivity } from '../../../lib/ops/stats';
+
+const { t, tz, today, canManage } = opsCtx(Astro);
+const id = Astro.params.id;
+if (!isUuid(id)) return new Response('Not found', { status: 404 });
+const db = await getDb();
+const self = `/app/bookings/${id}`;
+
+const f = await formData(Astro);
+if (f && canManage) {
+  const found = await bookingWithLines(t.id, id);
+  if (!found) return new Response('Not found', { status: 404 });
+  const { booking: b, customer: cu } = found;
+  const action = str(f, '_action', 40);
+  const B = schema.bookings;
+  const where = and(eq(B.id, b.id), eq(B.tenantId, t.id));
+  if (action === 'status') {
+    const to = str(f, 'to', 20);
+    const allowed: Record<string, string[]> = { confirmed: ['hold', 'quote', 'pending', 'canceled'], completed: ['pending', 'confirmed'], canceled: ['hold', 'quote', 'pending', 'confirmed'], pending: ['canceled', 'completed', 'quote'] };
+    if (!allowed[to]?.includes(b.status)) { flash(Astro.cookies, `Can’t change a ${b.status} booking to ${to}.`, 'error'); return Astro.redirect(self, 303); }
+    await db.update(B).set({ status: to as typeof b.status, holdExpiresAt: null, updatedAt: new Date(), ...(to === 'completed' ? { deliveredAt: b.deliveredAt ?? new Date(), pickedUpAt: b.pickedUpAt ?? new Date() } : {}) }).where(where);
+    await logActivity(t.id, 'booking', `Booking #${b.number} marked ${to}`, { bookingId: b.id });
+    if (to === 'confirmed' || to === 'completed') return Astro.redirect(`${self}?done=${to}`, 303);
+    flash(Astro.cookies, to === 'canceled' ? `Booking #${b.number} canceled — its inventory is free again for other customers.` : `Booking #${b.number} is now ${to}.`);
+  } else if (action === 'payment') {
+    const r = parse(z.object({ method: z.enum(['cash', 'check']), amount: z.number().int().min(1, 'Enter an amount').max(10_000_000), ref: z.string().max(40) }), { method: str(f, 'method', 10), amount: cents(f, 'amount'), ref: str(f, 'ref', 40) });
+    if (!r.ok) { flash(Astro.cookies, Object.values(r.errors)[0], 'error'); return Astro.redirect(self, 303); }
+    const d = r.data;
+    const ref = d.ref ? `${d.method}:${b.id}:${d.ref.replace(/\s+/g, '')}` : null;
+    const res = await recordPayment(t.id, b.id, { provider: d.method, ref, amountCents: d.amount, applicationFeeCents: 0 });
+    if (res.duplicate) flash(Astro.cookies, `That ${d.method} reference was already recorded.`, 'error');
+    else {
+      // Offline payments carry no platform fee, but still trigger marketplace/partner shares and conversion credit.
+      await onBookingPayment({ tenantId: t.id, bookingId: b.id, paymentRef: ref ?? `${d.method}:${b.id}:${Date.now()}`, amountCents: d.amount, applicationFeeCents: 0 });
+      await logActivity(t.id, 'payment', `${money(d.amount)} ${d.method} payment recorded on #${b.number}`, { bookingId: b.id });
+      return Astro.redirect(`${self}?done=paid&amt=${d.amount}`, 303);
+    }
+  } else if (action === 'notify') {
+    const kind = str(f, 'kind', 20) === 'receipt' ? 'receipt' : 'link';
+    const channel = str(f, 'channel', 10) === 'sms' ? 'sms' : 'email';
+    const to = channel === 'sms' ? cu?.phone : cu?.email;
+    if (!cu || !to) { flash(Astro.cookies, `This customer has no ${channel === 'sms' ? 'phone number' : 'email'} on file.`, 'error'); return Astro.redirect(self, 303); }
+    const link = `${await siteOrigin(t)}/booking/${b.publicToken}`;
+    const bal = Math.max(0, b.totalCents - b.paidCents);
+    const first = cu.name.split(' ')[0] || 'there';
+    const when = dateTime(b.startsAt, tz);
+    const body = kind === 'link'
+      ? `Hi ${first}! Your ${t.name} booking #${b.number} for ${when} has a balance of ${money(bal)}. Pay securely here: ${link}`
+      : `Hi ${first}, thanks for booking with ${t.name}!\n\nBooking #${b.number} · ${when}\nTotal ${money(b.totalCents)} · Paid ${money(b.paidCents)} · Balance ${money(bal)}\n\nView your booking and agreement: ${link}`;
+    const m = await send({ tenantId: t.id, channel, to, subject: kind === 'link' ? `Balance due for booking #${b.number}` : `Receipt for booking #${b.number}`, body, customerId: cu.id, bookingId: b.id, fromName: t.name, replyTo: t.email || undefined });
+    flash(Astro.cookies, m.status === 'failed' ? `Couldn’t send: ${m.error}` : `${kind === 'link' ? 'Payment link' : 'Receipt'} ${m.status === 'logged' ? 'logged (no provider configured)' : 'sent'} to ${to}.`, m.status === 'failed' ? 'error' : 'ok');
+  } else if (action === 'crew') {
+    const crew = str(f, 'crew', 40);
+    if (crew && !isUuid(crew)) return new Response('Bad request', { status: 400 });
+    if (crew) {
+      const [m] = await db.select().from(schema.memberships).where(and(eq(schema.memberships.tenantId, t.id), eq(schema.memberships.userId, crew))).limit(1);
+      if (!m) { flash(Astro.cookies, 'That person isn’t on your team.', 'error'); return Astro.redirect(self, 303); }
+    }
+    await db.update(B).set({ crewUserId: crew || null, updatedAt: new Date() }).where(where);
+    flash(Astro.cookies, crew ? 'Crew assigned.' : 'Crew unassigned.');
+  } else if (action === 'notes') {
+    await db.update(B).set({ notes: str(f, 'notes', 4000), updatedAt: new Date() }).where(where);
+    flash(Astro.cookies, 'Notes saved.');
+  } else if (action === 'fulfil') {
+    const what = str(f, 'what', 20);
+    if (what === 'delivered') await db.update(B).set({ deliveredAt: b.deliveredAt ? null : new Date(), updatedAt: new Date() }).where(where);
+    if (what === 'picked') await db.update(B).set({ pickedUpAt: b.pickedUpAt ? null : new Date(), updatedAt: new Date() }).where(where);
+    flash(Astro.cookies, 'Fulfilment updated.');
+  }
+  return Astro.redirect(self, 303);
+}
+
+const found = await bookingWithLines(t.id, id);
+if (!found) return new Response('Not found', { status: 404 });
+const { booking: b, lines, customer: c } = found;
+const [pays, msgs, team, itemRows] = await Promise.all([
+  db.select().from(schema.payments).where(and(eq(schema.payments.tenantId, t.id), eq(schema.payments.bookingId, b.id))).orderBy(desc(schema.payments.createdAt)),
+  db.select().from(schema.messages).where(and(eq(schema.messages.tenantId, t.id), eq(schema.messages.bookingId, b.id))).orderBy(desc(schema.messages.createdAt)).limit(20),
+  db.select({ id: schema.users.id, name: schema.users.name, email: schema.users.email, role: schema.memberships.role }).from(schema.memberships).innerJoin(schema.users, eq(schema.users.id, schema.memberships.userId)).where(eq(schema.memberships.tenantId, t.id)),
+  db.select({ id: schema.items.id, images: schema.items.images, kind: schema.items.kind }).from(schema.items).where(eq(schema.items.tenantId, t.id)),
+]);
+const img = new Map(itemRows.map((i) => [i.id, i.images[0]]));
+const day = localDay(b.startsAt, tz);
+const wx = (await weatherFor(t, [day]))[day];
+const balance = Math.max(0, b.totalCents - b.paidCents);
+const surfaceLabel = (t.settings?.surfaces ?? []).find((x) => x.key === b.surface)?.label ?? b.surface;
+const crewMember = team.find((m) => m.id === b.crewUserId);
+const attr = b.attribution ?? {};
+const attrRows = ([['Channel', attr.channel ? CHANNELS[attr.channel] ?? attr.channel : null], ['Source', attr.utmSource], ['Medium', attr.utmMedium], ['Campaign', attr.utmCampaign], ['Term', attr.utmTerm], ['Landing page', attr.landingPage], ['Referrer', attr.referrer], ['Google click ID', attr.gclid ? 'Yes' : null], ['Meta click ID', attr.fbclid ? 'Yes' : null]] as const).filter(([, v]) => v);
+const money2 = [
+  ['Rentals subtotal', b.subtotalCents], ['Delivery', b.deliveryCents], [`Surface (${surfaceLabel})`, b.surfaceCents], ['Damage waiver', b.damageWaiverCents],
+  [`Discount${b.couponCode ? ` (${b.couponCode})` : ''}`, -b.discountCents], ['Sales tax', b.taxCents], ['Service fee', b.customerFeeCents],
+].filter(([, v]) => v !== 0) as [string, number][];
+const checks = b.checklist ?? {};
+const canConfirm = ['hold', 'quote', 'pending', 'canceled'].includes(b.status);
+const canComplete = ['pending', 'confirmed'].includes(b.status);
+const canCancel = ['hold', 'quote', 'pending', 'confirmed'].includes(b.status);
+const done = Astro.url.searchParams.get('done');
+const paidAmt = Number(Astro.url.searchParams.get('amt')) || 0;
+const calUrl = `/app/bookings?view=calendar&month=${day.slice(0, 7)}`;
+const receiptForm = { _action: 'notify', kind: 'receipt', channel: 'email' };
+const linkForm = { _action: 'notify', kind: 'link', channel: c?.phone ? 'sms' : 'email' };
+---
+<AppLayout title={`Booking #${b.number}`} section="bookings" subtitle={`${dayTitle(day, today)} · ${time(b.startsAt, tz)}–${time(b.endsAt, tz)} · ${b.eventType}`} wide>
+  <Fragment slot="actions">
+    <a href="/app/bookings" class="btn-ghost"><Icon name="arrow" size={16} class="rotate-180" />All bookings</a>
+    <a href={`/app/deliveries?day=${day}`} class="btn-ghost"><Icon name="truck" size={16} />Route day</a>
+  </Fragment>
+
+  <Crumbs slot="crumbs" items={[{ label: 'Bookings', href: '/app/bookings' }, ...(c ? [{ label: c.name || c.email, href: `/app/customers/${c.id}` }] : []), { label: `#${b.number}` }]} />
+  {done === 'created' && (
+    <NextSteps title={`${b.status === 'quote' ? 'Quote' : 'Booking'} #${b.number} is on the books`} text={`${money(b.totalCents)} for ${c?.name ?? 'your customer'} on ${dayTitle(day, today)}. Inventory is reserved${b.status === 'quote' ? ' once they accept' : ''}.`} celebrate={b.status === 'confirmed'} dismiss={self}
+      actions={[
+        { label: b.status === 'quote' ? 'Email the quote' : 'Send confirmation', icon: 'message', primary: true, form: receiptForm },
+        { href: '#crew-h', label: 'Assign crew', icon: 'truck' },
+        { href: calUrl, label: 'View on calendar', icon: 'calendar' },
+      ]} />
+  )}
+  {done === 'confirmed' && (
+    <NextSteps title={`Booking #${b.number} confirmed!`} text="Date locked in. Let the customer know and get it on a truck." celebrate dismiss={self}
+      actions={[{ label: 'Send confirmation', icon: 'message', primary: true, form: receiptForm }, ...(balance > 0 ? [{ label: 'Text payment link', icon: 'dollar', form: linkForm }] : []), { href: `/app/deliveries?day=${day}`, label: 'Plan the route', icon: 'truck' }]} />
+  )}
+  {done === 'completed' && (
+    <NextSteps title={`Party #${b.number} complete`} text={balance > 0 ? `There’s still ${money(balance)} to collect.` : 'Paid in full. A happy customer is your best marketing.'} celebrate dismiss={self}
+      actions={[...(balance > 0 ? [{ label: 'Send payment link', icon: 'dollar', primary: true, form: linkForm }] : [{ href: '/app/marketing', label: 'Ask for a review', icon: 'star', primary: true }]), { href: `/app/crew?day=${localDay(b.endsAt, tz)}#stop-${b.id}-p`, label: 'Log cleaning', icon: 'sparkle' }, ...(c ? [{ href: `/app/bookings/new?customerId=${c.id}`, label: 'Book their next party', icon: 'plus' }] : [])]} />
+  )}
+  {done === 'paid' && (
+    <NextSteps title={`${money(paidAmt)} payment recorded`} text={balance > 0 ? `${money(balance)} balance remaining.` : 'Paid in full — nice!'} celebrate={balance === 0} dismiss={self}
+      actions={[{ label: 'Email a receipt', icon: 'message', primary: true, form: receiptForm }, { href: '/app/bookings?status=unpaid', label: 'Other balances due', icon: 'dollar' }]} />
+  )}
+  <div class="flex flex-wrap items-center gap-2 mb-5">
+    <StatusChip status={b.status} />
+    <WeatherBadge risk={wx} />
+    {b.deliveredAt && <span class="chip bg-green-100 text-green-800"><Icon name="truck" size={12} />Delivered {time(b.deliveredAt, tz)}</span>}
+    {b.pickedUpAt && <span class="chip bg-green-100 text-green-800"><Icon name="box" size={12} />Picked up</span>}
+    {balance > 0 && b.status !== 'canceled' ? <span class="chip bg-amber-100 text-amber-900">{money(balance)} balance due</span> : b.status !== 'canceled' && <span class="chip bg-green-100 text-green-800"><Icon name="check" size={12} />Paid in full</span>}
+  </div>
+
+  <div class="grid gap-6 lg:grid-cols-[minmax(0,1fr)_380px]">
+    <div class="space-y-6 min-w-0">
+      {canManage && (
+        <section class="card p-4 flex flex-wrap gap-2 items-center" aria-label="Status actions">
+          <p class="text-sm font-semibold mr-2">Update status</p>
+          {canConfirm && <form method="post"><input type="hidden" name="_action" value="status" /><input type="hidden" name="to" value="confirmed" /><button class="btn-primary"><Icon name="check" size={16} />{b.status === 'canceled' ? 'Reinstate & confirm' : 'Confirm'}</button></form>}
+          {canComplete && <form method="post"><input type="hidden" name="_action" value="status" /><input type="hidden" name="to" value="completed" /><button class="btn-ghost"><Icon name="trophy" size={16} />Mark completed</button></form>}
+          {b.status === 'completed' && <form method="post"><input type="hidden" name="_action" value="status" /><input type="hidden" name="to" value="pending" /><button class="btn-ghost">Reopen</button></form>}
+          {canCancel && <form method="post" class="sm:ml-auto" data-confirm={`Cancel booking #${b.number}? Its inventory is released for other customers. Payments are not refunded automatically.`}><input type="hidden" name="_action" value="status" /><input type="hidden" name="to" value="canceled" /><button class="btn-danger"><Icon name="x" size={16} />Cancel booking</button></form>}
+        </section>
+      )}
+
+      <section class="card overflow-hidden" aria-labelledby="lines-h">
+        <header class="px-5 py-4 border-b border-line flex items-center"><h2 id="lines-h" class="font-bold text-lg">Items</h2><span class="ml-auto text-xs text-ink-2">{lines.length} line{lines.length === 1 ? '' : 's'}</span></header>
+        <ul class="divide-y divide-line">
+          {lines.map((l) => (
+            <li class="flex items-center gap-3 px-5 py-3">
+              {img.get(l.itemId) ? <img src={img.get(l.itemId)} alt="" class="size-12 rounded-lg object-cover bg-canvas border border-line" loading="lazy" /> : <span class="size-12 rounded-lg bg-canvas grid place-items-center"><Icon name="box" /></span>}
+              <div class="min-w-0 flex-1"><a href={`/app/inventory/${l.itemId}`} class="font-semibold hover:text-brand">{l.name}</a><p class="text-xs text-ink-2">{l.qty} × {money(l.unitCents)}</p></div>
+              <p class="font-semibold tabular-nums">{money(l.totalCents)}</p>
+            </li>
+          ))}
+        </ul>
+        <dl class="border-t border-line px-5 py-4 space-y-1.5 text-sm bg-canvas/40">
+          {money2.map(([k, v]) => <div class="flex justify-between gap-4"><dt class="text-ink-2">{k}</dt><dd class="tabular-nums">{v < 0 ? `−${money(-v)}` : money(v)}</dd></div>)}
+          <div class="flex justify-between gap-4 pt-2 mt-2 border-t border-line text-base font-bold"><dt>Total</dt><dd class="tabular-nums">{money(b.totalCents)}</dd></div>
+          <div class="flex justify-between gap-4"><dt class="text-ink-2">Deposit required</dt><dd class="tabular-nums">{money(b.depositCents)}</dd></div>
+          <div class="flex justify-between gap-4"><dt class="text-ink-2">Paid</dt><dd class="tabular-nums text-green-700 font-semibold">{money(b.paidCents)}</dd></div>
+          <div class="flex justify-between gap-4"><dt class="font-semibold">Balance due</dt><dd class:list={['tabular-nums font-bold', balance ? 'text-warn' : '']}>{money(balance)}</dd></div>
+          <div class="flex justify-between gap-4 text-xs pt-2"><dt class="text-ink-2">BounceOS fee on online payments (none on cash/check)</dt><dd class="tabular-nums text-ink-2">{money(b.platformFeeCents)}</dd></div>
+        </dl>
+      </section>
+
+      <div class="grid gap-6 2xl:grid-cols-2">
+        <section class="card p-5" aria-labelledby="pay-h">
+          <h2 id="pay-h" class="font-bold text-lg">Payments</h2>
+          {pays.length === 0 ? <p class="text-sm text-ink-2 mt-2">No payments yet.</p> : (
+            <ul class="mt-3 space-y-2">
+              {pays.map((p) => (
+                <li class="flex items-center gap-2 text-sm">
+                  <span class="chip bg-canvas text-ink-2 border border-line capitalize">{p.provider}</span>
+                  <span class="text-ink-2 text-xs">{dateOnly(p.createdAt, tz)}</span>
+                  <span class="ml-auto font-semibold tabular-nums">{money(p.amountCents)}</span>
+                </li>
+              ))}
+            </ul>
+          )}
+          {canManage && b.status !== 'canceled' && (
+            <form method="post" class="mt-4 pt-4 border-t border-line space-y-3">
+              <input type="hidden" name="_action" value="payment" />
+              <p class="text-sm font-semibold">Record cash or check</p>
+              <div class="grid grid-cols-2 gap-2">
+                <div><label class="label" for="method">Method</label><select id="method" name="method" class="input"><option value="cash">Cash</option><option value="check">Check</option></select></div>
+                <div><label class="label" for="amount">Amount ($)</label><input id="amount" name="amount" class="input" inputmode="decimal" required value={balance ? (balance / 100).toFixed(2) : ''} /></div>
+              </div>
+              <div><label class="label" for="ref">Check # / note <span class="text-ink-2 font-normal">(optional)</span></label><input id="ref" name="ref" class="input" maxlength="40" /></div>
+              <button class="btn-primary w-full" data-busy-label="Recording…"><Icon name="dollar" size={16} />Record payment</button>
+            </form>
+          )}
+        </section>
+
+        <section class="card p-5" aria-labelledby="msg-h">
+          <h2 id="msg-h" class="font-bold text-lg">Messages</h2>
+          {canManage && (
+            <form method="post" class="mt-3 space-y-3">
+              <input type="hidden" name="_action" value="notify" />
+              <fieldset class="grid grid-cols-2 gap-2">
+                <legend class="label">Send</legend>
+                <label class="flex items-center gap-2 rounded-xl border border-line px-3 min-h-11 text-sm has-[:checked]:border-brand has-[:checked]:bg-brand-soft"><input type="radio" name="kind" value="link" checked={balance > 0} />Payment link</label>
+                <label class="flex items-center gap-2 rounded-xl border border-line px-3 min-h-11 text-sm has-[:checked]:border-brand has-[:checked]:bg-brand-soft"><input type="radio" name="kind" value="receipt" checked={balance === 0} />Receipt</label>
+              </fieldset>
+              <fieldset class="grid grid-cols-2 gap-2">
+                <legend class="sr-only">Channel</legend>
+                <label class="flex items-center gap-2 rounded-xl border border-line px-3 min-h-11 text-sm has-[:checked]:border-brand has-[:checked]:bg-brand-soft"><input type="radio" name="channel" value="email" checked />Email</label>
+                <label class="flex items-center gap-2 rounded-xl border border-line px-3 min-h-11 text-sm has-[:checked]:border-brand has-[:checked]:bg-brand-soft"><input type="radio" name="channel" value="sms" />Text</label>
+              </fieldset>
+              <button class="btn-ghost w-full"><Icon name="message" size={16} />Send to {c?.name?.split(' ')[0] ?? 'customer'}</button>
+            </form>
+          )}
+          {msgs.length > 0 && (
+            <ul class="mt-4 pt-4 border-t border-line space-y-2">
+              {msgs.map((m) => (
+                <li class="text-xs"><span class="font-semibold uppercase">{m.channel}</span> <span class="text-ink-2">· {m.status} · {dateTime(m.createdAt, tz)}</span><p class="text-ink-2 line-clamp-2">{m.subject || m.body}</p></li>
+              ))}
+            </ul>
+          )}
+        </section>
+      </div>
+
+      <section class="card p-5" aria-labelledby="notes-h">
+        <h2 id="notes-h" class="font-bold text-lg">Notes</h2>
+        <form method="post" class="mt-3">
+          <input type="hidden" name="_action" value="notes" />
+          <label for="notes" class="sr-only">Booking notes</label>
+          <textarea id="notes" name="notes" class="input" rows="4" placeholder="Gate code, dog in yard, setup on the left side…" disabled={!canManage}>{b.notes}</textarea>
+          {canManage && <button class="btn-ghost mt-2">Save notes</button>}
+        </form>
+      </section>
+    </div>
+
+    <aside class="space-y-6">
+      <section class="card p-5" aria-labelledby="cust-h">
+        <h2 id="cust-h" class="font-bold text-lg">Customer</h2>
+        {c ? (
+          <div class="mt-2 text-sm space-y-1">
+            <a href={`/app/customers/${c.id}`} class="font-semibold text-brand">{c.name || c.email}</a>
+            <p><a href={`mailto:${c.email}`} class="text-ink-2 hover:text-ink break-all">{c.email}</a></p>
+            {c.phone && <p><a href={`tel:${c.phone}`} class="text-ink-2 hover:text-ink">{c.phone}</a></p>}
+            {c.celebrantName && <p class="text-ink-2">Celebrating: {c.celebrantName}{c.celebrantBirthday && ` · ${c.celebrantBirthday.slice(5)}`}</p>}
+            <p class="text-xs text-ink-2">Lifetime value {money(c.lifetimeValueCents)} · <span class="capitalize">{c.type}</span></p>
+          </div>
+        ) : <p class="text-sm text-ink-2 mt-2">No customer linked.</p>}
+        <div class="mt-4 pt-4 border-t border-line text-sm">
+          <p class="font-semibold">Event address</p>
+          <p class="text-ink-2">{fullAddress(b) || '—'}</p>
+          <p class="text-ink-2">Surface: {surfaceLabel}</p>
+          <a href={mapsLink(b)} target="_blank" rel="noopener" class="text-brand font-semibold inline-flex items-center gap-1 mt-1"><Icon name="map" size={14} />Directions</a>
+        </div>
+      </section>
+
+      <section class="card p-5" aria-labelledby="crew-h">
+        <h2 id="crew-h" class="font-bold text-lg">Crew & fulfilment</h2>
+        {canManage ? (
+          <form method="post" class="mt-3 flex gap-2 items-end">
+            <input type="hidden" name="_action" value="crew" />
+            <div class="flex-1"><label class="label" for="crew">Assigned to</label>
+              <select id="crew" name="crew" class="input">
+                <option value="">Unassigned</option>
+                {team.map((m) => <option value={m.id} selected={m.id === b.crewUserId}>{m.name || m.email} ({m.role})</option>)}
+              </select>
+            </div>
+            <button class="btn-ghost">Assign</button>
+          </form>
+        ) : <p class="text-sm mt-2">{crewMember ? crewMember.name || crewMember.email : 'Unassigned'}</p>}
+        {team.every((m) => m.role !== 'crew') && <p class="hint">No crew yet — <a class="text-brand font-semibold" href="/app/settings/team">invite your crew</a> so they get the mobile route app.</p>}
+        <div class="grid grid-cols-2 gap-2 mt-4">
+          <form method="post"><input type="hidden" name="_action" value="fulfil" /><input type="hidden" name="what" value="delivered" /><button class:list={['w-full', b.deliveredAt ? 'btn-ghost !border-green-300 !bg-green-50' : 'btn-ghost']} disabled={!canManage}><Icon name={b.deliveredAt ? 'check' : 'truck'} size={16} />{b.deliveredAt ? 'Delivered' : 'Mark delivered'}</button></form>
+          <form method="post"><input type="hidden" name="_action" value="fulfil" /><input type="hidden" name="what" value="picked" /><button class:list={['w-full', b.pickedUpAt ? 'btn-ghost !border-green-300 !bg-green-50' : 'btn-ghost']} disabled={!canManage}><Icon name={b.pickedUpAt ? 'check' : 'box'} size={16} />{b.pickedUpAt ? 'Picked up' : 'Mark picked up'}</button></form>
+        </div>
+        <ul class="mt-4 grid grid-cols-2 gap-x-3 gap-y-1.5 text-xs">
+          {CHECKLIST.map((x) => <li class:list={['flex items-center gap-1.5', checks[x.key] ? 'text-green-700 font-semibold' : 'text-ink-2']}><Icon name={checks[x.key] ? 'check' : 'clock'} size={13} />{x.label}</li>)}
+        </ul>
+      </section>
+
+      <section class="card p-5" aria-labelledby="agr-h">
+        <h2 id="agr-h" class="font-bold text-lg">Rental agreement</h2>
+        {b.agreementSignedAt ? (
+          <dl class="mt-2 text-sm space-y-1">
+            <div class="flex items-center gap-1.5 text-green-700 font-semibold"><Icon name="shield" size={16} />E-signed</div>
+            <div><dt class="inline text-ink-2">Signed by </dt><dd class="inline font-semibold">{b.agreementSignedName}</dd></div>
+            <div><dt class="inline text-ink-2">When </dt><dd class="inline">{dateTime(b.agreementSignedAt, tz)}</dd></div>
+            <div><dt class="inline text-ink-2">IP </dt><dd class="inline font-mono text-xs">{b.agreementSignedIp}</dd></div>
+            {b.agreementHash && <div><dt class="text-ink-2">Document fingerprint (SHA-256)</dt><dd class="font-mono text-[11px] break-all text-ink-2">{b.agreementHash}</dd></div>}
+          </dl>
+        ) : <p class="text-sm text-ink-2 mt-2">Not signed yet. Send the customer their booking link — they can sign from their phone.</p>}
+      </section>
+
+      <section class="card p-5" aria-labelledby="attr-h">
+        <h2 id="attr-h" class="font-bold text-lg">Where it came from</h2>
+        {attrRows.length ? (
+          <dl class="mt-2 text-sm divide-y divide-line">
+            {attrRows.map(([k, v]) => <div class="flex justify-between gap-3 py-1.5"><dt class="text-ink-2">{k}</dt><dd class="font-medium text-right break-all">{v}</dd></div>)}
+          </dl>
+        ) : <p class="text-sm text-ink-2 mt-2">Direct / manual booking.</p>}
+        <p class="text-xs text-ink-2 mt-3">Booked {dateTime(b.createdAt, tz)}{b.leadId && <> · <a href="/app/customers/leads" class="text-brand font-semibold">converted from a lead</a></>}</p>
+      </section>
+    </aside>
+  </div>
+  <SubmitGuard />
+</AppLayout>

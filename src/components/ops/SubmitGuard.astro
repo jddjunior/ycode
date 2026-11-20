@@ -1,0 +1,25 @@
+---
+/** Progressive enhancement for every POST form on the page: busy state + double-submit guard, and data-confirm dialogs. */
+---
+<script>
+  document.addEventListener('submit', (e) => {
+    const form = e.target as HTMLFormElement;
+    if (!(form instanceof HTMLFormElement) || form.method.toLowerCase() !== 'post') return;
+    const btn = (e as SubmitEvent).submitter as HTMLButtonElement | null;
+    const msg = btn?.dataset.confirm ?? form.dataset.confirm;
+    if (msg && !window.confirm(msg)) { e.preventDefault(); return; }
+    if (form.dataset.busy === '1') { e.preventDefault(); return; }
+    form.dataset.busy = '1';
+    form.setAttribute('aria-busy', 'true');
+    if (btn) {
+      btn.classList.add('opacity-70', 'cursor-wait');
+      const label = btn.dataset.busyLabel;
+      if (label) btn.textContent = label;
+      // Disable after the browser captures the submitter's name/value.
+      setTimeout(() => { btn.disabled = true; }, 0);
+    }
+    // Recover if navigation is cancelled (e.g. download links or bfcache).
+    setTimeout(() => { delete form.dataset.busy; form.removeAttribute('aria-busy'); if (btn) { btn.disabled = false; btn.classList.remove('opacity-70', 'cursor-wait'); } }, 8000);
+  });
+  window.addEventListener('pageshow', () => document.querySelectorAll<HTMLFormElement>('form[data-busy]').forEach((f) => { delete f.dataset.busy; f.removeAttribute('aria-busy'); f.querySelectorAll('button').forEach((b) => { b.disabled = false; b.classList.remove('opacity-70', 'cursor-wait'); }); }));
+</script>

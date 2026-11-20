@@ -1,0 +1,288 @@
+---
+import { and, asc, eq, sql } from 'drizzle-orm';
+import AppLayout from '../../../layouts/AppLayout.astro';
+import Icon from '../../../components/Icon.astro';
+import NextSteps from '../../../components/growth/NextSteps.astro';
+import Guide from '../../../components/growth/Guide.astro';
+import Enhance from '../../../components/growth/Enhance.astro';
+import { getDb, schema } from '../../../db/client';
+import type { TenantSettings } from '../../../db/schema';
+import { formData, str, list } from '../../../lib/forms';
+import { slugify } from '../../../lib/util';
+import { cityBlocks, cityFacts } from '../../../lib/provision';
+import { generateCityIntro, keywordsFor } from '../../../lib/ai';
+import { PLANS } from '../../../lib/plans';
+import { invalidateTenantCache } from '../../../lib/tenant';
+import { scoreCmsPage, scoreTone } from '../../../lib/growth/seoscore';
+import { pagePath } from '../../../lib/growth/blockdefs';
+import { ctx, done, go } from '../../../lib/growth/app';
+
+/** tenants.settings has no typed slot for these yet — stored via a typed cast (see report). */
+type Redirect = { from: string; to: string };
+type SeoSettings = TenantSettings & { redirects?: Redirect[]; gbpChecklist?: string[] };
+
+const { t, tenantId, canEdit } = ctx(Astro);
+const db = await getDb();
+const settings = t.settings as SeoSettings;
+const limit = PLANS[t.plan].limits.cityPages;
+
+const GBP: { key: string; title: string; text: string }[] = [
+  { key: 'name', title: 'Use your real business name — no keywords', text: 'Keyword-stuffed names ("Bounce House Rentals Houston Best Prices") are the #1 suspension trigger. Match your signage, invoices and LLC.' },
+  { key: 'sab', title: 'Set up as a service-area business (hide your address)', text: 'Run from home or a storage unit customers don’t visit? Clear the address and add service areas instead. Never use a PO box, UPS Store or virtual office.' },
+  { key: 'areas', title: 'Add up to 20 service areas within ~2 hours’ drive', text: 'Use the cities and ZIPs you actually deliver to. They should match your delivery zones and city pages.' },
+  { key: 'category', title: 'Primary category: “Party equipment rental service”', text: 'Add “Bounce house rental service” and (if relevant) “Event planner” or “Tent rental service” as secondary categories.' },
+  { key: 'docs', title: 'Keep reinstatement documents ready', text: 'Business license, liability insurance certificate, a utility bill and a photo of branded vehicle/equipment. Suspensions are reinstated with these.' },
+  { key: 'one', title: 'One profile per real location', text: 'Duplicate or “virtual” listings get every listing suspended. A second warehouse with staff = a second profile.' },
+  { key: 'products', title: 'Add your rentals as Products with photos', text: 'Top units with price-from, a photo and a link to the product page on your site.' },
+  { key: 'reviews', title: 'Ask every customer for a review — same link for all', text: 'Our review requests send everyone the same Google link (no review gating — it violates Google policy).' },
+  { key: 'posts', title: 'Post weekly (offers, availability, new units)', text: 'Schedule GBP posts from Social Studio. Fresh posts and photos keep the profile active.' },
+  { key: 'hours', title: 'Hours, holiday hours and messaging', text: 'Set booking/phone hours and turn on messaging only if someone answers fast — slow replies hurt.' },
+];
+
+const f = await formData(Astro);
+if (f) {
+  if (!canEdit) return done(Astro, 'Only owners and managers can change SEO settings.', undefined, 'error');
+  const action = str(f, '_action', 20);
+  if (action === 'generate') {
+    const state = str(f, 'state', 2).toUpperCase() || t.state;
+    if (!/^[A-Z]{2}$/.test(state)) return done(Astro, 'State must be a 2-letter code.', '/app/seo#generator', 'error');
+    const cities = [...new Set(list(f, 'cities').map((c) => c.replace(/[^\p{L}\s.'-]/gu, '').replace(/\s+/g, ' ').trim()).filter((c) => c.length >= 2 && c.length <= 60))].slice(0, 15);
+    if (!cities.length) return done(Astro, 'Enter at least one city.', '/app/seo#generator', 'error');
+    const [{ n }] = await db.select({ n: sql<number>`count(*)::int` }).from(schema.pages).where(and(eq(schema.pages.tenantId, tenantId), eq(schema.pages.kind, 'city')));
+    const room = limit == null ? Infinity : Math.max(0, limit - n);
+    if (room === 0) return done(Astro, `You’ve used all ${limit} city pages on ${PLANS[t.plan].name}. Upgrade for more.`, '/app/seo#generator', 'error');
+    const existing = new Set((await db.select({ slug: schema.pages.slug }).from(schema.pages).where(and(eq(schema.pages.tenantId, tenantId), eq(schema.pages.kind, 'city')))).map((r) => r.slug));
+    let made = 0, skipped = 0;
+    const madeIds: string[] = [];
+    for (const city of cities) {
+      const slug = slugify(city);
+      if (existing.has(slug)) { skipped++; continue; }
+      if (made >= room) break;
+      const intro = await generateCityIntro(t.name, city, state, {});
+      const [row] = await db.insert(schema.pages).values({
+        tenantId, kind: 'city', slug, title: `Bounce House Rentals ${city}, ${state}`,
+        seoDescription: `Bounce house & party rentals delivered in ${city}, ${state}. Check live availability and book online — setup & pickup included.`,
+        blocks: cityBlocks(city), local: cityFacts(city, state, { intro }), status: 'published',
+      }).onConflictDoNothing().returning({ id: schema.pages.id });
+      existing.add(slug); made++;
+      if (row) madeIds.push(row.id);
+    }
+    const capped = cities.length - skipped - made;
+    if (!made) return done(Astro, skipped ? `All ${skipped} of those cities already have a page.` : 'No pages created — plan limit reached.', '/app/seo#generator', 'error');
+    return go(Astro, `/app/seo?done=cities&ids=${madeIds.join(',')}&skipped=${skipped}&capped=${capped}`);
+  }
+  if (action === 'redirects') {
+    const out: Redirect[] = [];
+    const lines = str(f, 'redirects', 40_000).split(/\r?\n/).map((l) => l.trim()).filter(Boolean);
+    for (const [i, line] of lines.entries()) {
+      const [from, to] = line.split(/\s*(?:->|→|\s)\s*/).filter(Boolean);
+      if (!from || !to) return done(Astro, `Line ${i + 1}: use “/old-path /new-path”.`, '/app/seo#migration', 'error');
+      if (!/^\/[^\s"'<>]{0,299}$/.test(from)) return done(Astro, `Line ${i + 1}: “from” must be a path starting with /.`, '/app/seo#migration', 'error');
+      if (!/^(\/[^\s"'<>]{0,499}|https:\/\/[^\s"'<>]{1,500})$/.test(to)) return done(Astro, `Line ${i + 1}: “to” must be a /path or https:// URL.`, '/app/seo#migration', 'error');
+      if (from === to) return done(Astro, `Line ${i + 1}: a path can’t redirect to itself.`, '/app/seo#migration', 'error');
+      if (!out.some((r) => r.from === from)) out.push({ from, to });
+    }
+    if (out.length > 500) return done(Astro, 'At most 500 redirects.', '/app/seo#migration', 'error');
+    const next: SeoSettings = { ...settings, redirects: out };
+    await db.update(schema.tenants).set({ settings: next as TenantSettings, updatedAt: new Date() }).where(eq(schema.tenants.id, tenantId));
+    invalidateTenantCache();
+    return done(Astro, `Saved ${out.length} redirect${out.length === 1 ? '' : 's'} (301).`, '/app/seo#migration');
+  }
+  if (action === 'gbp') {
+    const keys = f.getAll('gbp').map(String).filter((k) => GBP.some((g) => g.key === k));
+    const next: SeoSettings = { ...settings, gbpChecklist: keys };
+    await db.update(schema.tenants).set({ settings: next as TenantSettings, updatedAt: new Date() }).where(eq(schema.tenants.id, tenantId));
+    invalidateTenantCache();
+    return done(Astro, `Google Business Profile checklist: ${keys.length}/${GBP.length} done.`, '/app/seo#gbp');
+  }
+  return done(Astro, 'Unknown action.', undefined, 'error');
+}
+
+const [site] = await db.select().from(schema.sites).where(eq(schema.sites.tenantId, tenantId)).limit(1);
+const pages = await db.select().from(schema.pages).where(eq(schema.pages.tenantId, tenantId)).orderBy(asc(schema.pages.kind), asc(schema.pages.slug));
+const cats = await db.select({ name: schema.categories.name }).from(schema.categories).where(eq(schema.categories.tenantId, tenantId)).orderBy(asc(schema.categories.sort));
+const cityPages = pages.filter((p) => p.kind === 'city');
+const scored = pages.map((p) => ({ p, s: scoreCmsPage(p, site, t, { cityCount: cityPages.length, categoryCount: cats.length }) })).sort((a, b) => a.s.score - b.s.score);
+const avg = scored.length ? Math.round(scored.reduce((s, x) => s + x.s.score, 0) / scored.length) : 0;
+const thin = cityPages.filter((p) => !(p.local?.neighborhoods?.length) && !(p.local?.parks?.length)).length;
+const kwCities = cityPages.slice(0, 6).map((p) => p.local?.city ?? p.title);
+const kwCats = cats.slice(0, 4).map((c) => c.name);
+const gbpDone = new Set(settings.gbpChecklist ?? []);
+const doneKey = Astro.url.searchParams.get('done');
+const newIds = (Astro.url.searchParams.get('ids') ?? '').split(',').filter((x) => /^[0-9a-f-]{36}$/.test(x));
+const newPages = cityPages.filter((p) => newIds.includes(p.id));
+const newCities = newPages.map((p) => p.local?.city ?? p.title);
+const skippedN = Number(Astro.url.searchParams.get('skipped') ?? 0), cappedN = Number(Astro.url.searchParams.get('capped') ?? 0);
+const redirectsText = (settings.redirects ?? []).map((r) => `${r.from} ${r.to}`).join('\n');
+---
+<AppLayout title="SEO" section="seo" subtitle="Rank in every town you serve — without paying an agency. Every page scored, every city covered.">
+  <a slot="actions" href="#generator" class="btn-primary"><Icon name="plus" size={16} />City pages</a>
+  <Enhance />
+  {doneKey === 'cities' && newPages.length > 0 && (
+    <NextSteps title={`${newPages.length} city page${newPages.length === 1 ? '' : 's'} live: ${newCities.slice(0, 4).join(', ')}${newCities.length > 4 ? '…' : ''}`}
+      text={`Each has a local intro, FAQs and live booking.${skippedN ? ` ${skippedN} already existed.` : ''}${cappedN > 0 ? ` ${cappedN} skipped — plan limit reached.` : ''} Pages with real neighborhoods and parks outrank thin templates.`} dismissHref="/app/seo"
+      actions={[
+        { href: `/app/seo/city/${newPages[0].id}`, label: `Add local facts for ${newCities[0]}`, icon: 'map', primary: true },
+        { href: `/app/ads?cities=${encodeURIComponent(newCities.slice(0, 10).join(','))}#build`, label: 'Create an ad for these cities', icon: 'target' },
+        { href: `/app/website/pages/${newPages[0].id}`, label: 'Preview & edit blocks', icon: 'globe' },
+      ]} />
+  )}
+  <Guide why="Most rental bookings start with a local search like “bounce house rental Katy”. Ranking takes a page per town, a fast site, real local detail, structured data and a healthy Google Business Profile — this page covers all five.">
+    <li>Fix the lowest-scoring pages first — titles and meta descriptions are 5-minute wins.</li>
+    <li>Add 4+ real neighborhoods, parks or venues to every city page. Copy-paste templates get ignored.</li>
+    <li>Use keyword ideas in your H1 and title: service + city, e.g. “Water Slide Rentals Katy, TX”.</li>
+    <li>Your Google Business Profile drives the map pack — work through the checklist below.</li>
+    <li>Switching platforms? Map old URLs to new ones before you move your domain.</li>
+    <li>Ask every customer for a review (Campaigns → Reviews). Volume and recency both count.</li>
+  </Guide>
+  <nav class="flex gap-1 overflow-x-auto mb-5 -mx-1 px-1 text-sm font-semibold" aria-label="SEO sections">
+    {[['#pages', 'Page scores'], ['#generator', 'City pages'], ['#keywords', 'Keyword ideas'], ['#gbp', 'Google Business Profile'], ['#migration', 'Migration & redirects']].map(([h, l]) => <a href={h} class="whitespace-nowrap rounded-full px-4 py-2 border border-line bg-white text-ink-2 hover:text-ink">{l}</a>)}
+  </nav>
+
+  <div class="grid gap-3 grid-cols-2 lg:grid-cols-4 mb-6">
+    <div class="kpi"><p class="kpi-label">Average score</p><p class="kpi-value">{avg}<span class="text-sm text-ink-2 font-medium">/100</span></p></div>
+    <div class="kpi"><p class="kpi-label">City pages</p><p class="kpi-value">{cityPages.length}<span class="text-sm text-ink-2 font-medium"> / {limit ?? '∞'}</span></p></div>
+    <div class="kpi"><p class="kpi-label">Thin city pages</p><p class:list={['kpi-value', thin ? 'text-warn' : 'text-mint']}>{thin}</p></div>
+    <div class="kpi"><p class="kpi-label">GBP checklist</p><p class="kpi-value">{gbpDone.size}<span class="text-sm text-ink-2 font-medium">/{GBP.length}</span></p></div>
+  </div>
+
+  <section id="pages" class="card overflow-hidden mb-6 scroll-mt-24 group/scores" aria-labelledby="scores-h">
+    <div class="px-4 py-3 border-b border-line flex flex-wrap items-center gap-2">
+      <h2 id="scores-h" class="font-bold">Page scores</h2>
+      <p class="text-xs text-ink-2">Lowest first. Estimated from your page content; the live page also includes rentals and reviews.</p>
+    </div>
+    <ul class="divide-y divide-line">
+      {scored.map(({ p, s }, idx) => {
+        const fails = s.checks.filter((c) => !c.ok);
+        return (
+          <li class:list={[idx >= 8 && 'hidden group-has-[#all-scores:checked]/scores:block']}>
+            <details class="group">
+              <summary class="flex items-center gap-3 px-4 py-3 cursor-pointer list-none">
+                <span class:list={['grid place-items-center size-11 rounded-xl font-bold tabular-nums shrink-0', scoreTone(s.score)]} aria-label={`Score ${s.score} out of 100`}>{s.score}</span>
+                <span class="min-w-0 flex-1">
+                  <span class="block font-semibold truncate">{p.title}</span>
+                  <span class="block text-xs text-ink-2 truncate">{pagePath(p.kind, p.slug)}{p.status === 'draft' ? ' · draft' : ''}</span>
+                  <span class="mt-1 flex flex-wrap gap-1">{fails.length ? fails.slice(0, 3).map((c) => <span class="chip bg-red-50 text-red-800 font-medium">{c.label.replace(/^At least /, '').replace(/ of unique content/, '')}</span>) : <span class="chip bg-green-50 text-green-800">All checks pass</span>}</span>
+                </span>
+                <Icon name="arrow" size={16} class="text-ink-2 transition-transform group-open:rotate-90 shrink-0" />
+              </summary>
+              <div class="px-4 pb-4 grid gap-4 lg:grid-cols-[1fr_280px]">
+                <ul class="space-y-1.5">
+                  {s.checks.map((c) => (
+                    <li class="flex gap-2 text-sm">
+                      <span class:list={['grid place-items-center size-5 rounded-full shrink-0 mt-0.5', c.ok ? 'bg-green-100 text-green-700' : 'bg-red-100 text-red-700']}><Icon name={c.ok ? 'check' : 'x'} size={12} /></span>
+                      <span><span class="font-medium">{c.label}</span>{!c.ok && <span class="block text-ink-2 text-xs">{c.tip}</span>}</span>
+                    </li>
+                  ))}
+                </ul>
+                <div class="rounded-xl bg-canvas p-3 text-xs space-y-1">
+                  <p class="font-semibold text-ink">Title ({s.title.length})</p><p class="text-ink-2 break-words">{s.title}</p>
+                  <p class="font-semibold text-ink pt-1">Description ({s.description.length})</p><p class="text-ink-2 break-words">{s.description || '—'}</p>
+                  <div class="flex flex-wrap gap-2 pt-2">
+                    <a class="btn-ghost min-h-9 px-3 text-xs" href={`/app/website/pages/${p.id}`}>Edit page</a>
+                    {p.kind === 'city' && <a class="btn-ghost min-h-9 px-3 text-xs" href={`/app/seo/city/${p.id}`}>Local facts</a>}
+                  </div>
+                </div>
+              </div>
+            </details>
+          </li>
+        );
+      })}
+    </ul>
+    {scored.length > 8 && <label class="flex items-center justify-center gap-2 px-4 py-3 border-t border-line text-sm font-semibold text-brand cursor-pointer hover:bg-canvas has-[:focus-visible]:ring-2 has-[:focus-visible]:ring-brand/40"><input type="checkbox" id="all-scores" class="sr-only peer" /><span class="peer-checked:hidden">Show all {scored.length} pages</span><span class="hidden peer-checked:inline">Show fewer</span></label>}
+  </section>
+
+  <div class="grid gap-6 lg:grid-cols-2 mb-6">
+    <section id="generator" class="card p-4 sm:p-6 scroll-mt-24" aria-labelledby="gen-h">
+      <h2 id="gen-h" class="font-bold text-lg">City page generator</h2>
+      <p class="text-sm text-ink-2 mt-1">One page per town you deliver to, each with a local intro, FAQs and booking. Then add real neighborhoods, parks and venues — unique local detail beats thin, copy-paste pages.</p>
+      {canEdit ? (
+        <form method="post" class="mt-4 space-y-3">
+          <input type="hidden" name="_action" value="generate" />
+          <div><label class="label" for="cities">Cities (comma or one per line)</label><textarea class="input" id="cities" name="cities" rows="4" required placeholder="Katy, Sugar Land, Pearland"></textarea></div>
+          <div class="flex items-end gap-3">
+            <div class="w-24"><label class="label" for="state">State</label><input class="input uppercase" id="state" name="state" value={t.state} maxlength="2" /></div>
+            <button class="btn-primary flex-1" data-busy="Writing pages…"><Icon name="sparkle" size={16} />Generate pages</button>
+          </div>
+          <p class="hint">{limit == null ? 'Unlimited city pages on your plan.' : `${Math.max(0, limit - cityPages.length)} of ${limit} city pages left on ${PLANS[t.plan].name}.`} Up to 15 per batch.</p>
+        </form>
+      ) : <p class="hint mt-3">View-only access.</p>}
+      {cityPages.length > 0 && (
+        <ul class="mt-5 divide-y divide-line border-t border-line">
+          {cityPages.map((p) => {
+            const l = p.local;
+            const n = (l?.neighborhoods?.length ?? 0) + (l?.parks?.length ?? 0) + (l?.venues?.length ?? 0);
+            return (
+              <li class="flex items-center gap-2 py-2 text-sm">
+                <span class="min-w-0 flex-1 truncate font-medium">{l?.city ?? p.title}{l?.state ? `, ${l.state}` : ''}</span>
+                <span class:list={['chip', n >= 4 ? 'bg-green-50 text-green-800' : n ? 'bg-sun/30 text-[#7A5200]' : 'bg-red-50 text-red-800']}>{n} local facts</span>
+                <a class="text-brand font-semibold text-xs" href={`/app/seo/city/${p.id}`}>Edit facts</a>
+                <a class="text-ink-2 hover:text-brand text-xs" href={`/app/ads?cities=${encodeURIComponent(l?.city ?? '')}#build`} aria-label={`Create an ad for ${l?.city}`}><Icon name="target" size={14} /></a>
+              </li>
+            );
+          })}
+        </ul>
+      )}
+    </section>
+
+    <section id="keywords" class="card p-4 sm:p-6 scroll-mt-24" aria-labelledby="kw-h">
+      <h2 id="kw-h" class="font-bold text-lg">Keyword ideas</h2>
+      <p class="text-sm text-ink-2 mt-1">High-intent searches per city × category. Use them in page titles, H1s and your Google Ads (<code>[exact]</code> and <code>"phrase"</code> match).</p>
+      {kwCities.length === 0 ? <p class="hint mt-3">Create a city page to see ideas.</p> : (
+        <div class="mt-4 space-y-3 max-h-[540px] overflow-y-auto pr-1">
+          {kwCities.map((c) => (
+            <details class="rounded-xl border border-line" open={c === kwCities[0]}>
+              <summary class="cursor-pointer px-3 py-2 font-semibold text-sm">{c}</summary>
+              <div class="px-3 pb-3 space-y-2">
+                {kwCats.map((cat) => (
+                  <div>
+                    <p class="text-xs font-semibold text-ink-2 uppercase tracking-wide">{cat}</p>
+                    <div class="flex flex-wrap gap-1 mt-1">{keywordsFor(cat, c).slice(0, 8).map((k) => <span class="chip bg-canvas text-ink font-mono font-normal">{k}</span>)}</div>
+                  </div>
+                ))}
+              </div>
+            </details>
+          ))}
+        </div>
+      )}
+    </section>
+  </div>
+
+  <div class="grid gap-6 lg:grid-cols-2">
+    <section id="gbp" class="card p-4 sm:p-6 scroll-mt-24" aria-labelledby="gbp-h">
+      <h2 id="gbp-h" class="font-bold text-lg">Google Business Profile checklist</h2>
+      <p class="text-sm text-ink-2 mt-1">The map pack drives most local calls. Most rental operators are service-area businesses — set up that way to avoid suspensions.</p>
+      <form method="post" class="mt-4 space-y-2">
+        <input type="hidden" name="_action" value="gbp" />
+        {GBP.map((g) => (
+          <label class="flex gap-3 rounded-xl border border-line p-3 cursor-pointer has-[:checked]:bg-green-50/60 has-[:checked]:border-green-200">
+            <input type="checkbox" name="gbp" value={g.key} checked={gbpDone.has(g.key)} class="mt-1 size-4 accent-[var(--color-mint)] shrink-0" />
+            <span><span class="block text-sm font-semibold">{g.title}</span><span class="block text-xs text-ink-2 mt-0.5">{g.text}</span></span>
+          </label>
+        ))}
+        {canEdit && <button class="btn-primary w-full mt-2" data-busy="Saving…">Save checklist</button>}
+      </form>
+    </section>
+
+    <section id="migration" class="card p-4 sm:p-6 scroll-mt-24" aria-labelledby="mig-h">
+      <h2 id="mig-h" class="font-bold text-lg">Migration & redirects</h2>
+      <div class="text-sm text-ink-2 mt-1 space-y-2">
+        <p>Switching from InflatableOffice, Event Rental Systems or a WordPress site? Keep your rankings:</p>
+        <ol class="list-decimal pl-5 space-y-1">
+          <li>Export your old sitemap (usually <code>/sitemap.xml</code>) and list every URL that gets traffic.</li>
+          <li>Map each old URL to its new home below — e.g. <code>/items/rainbow-castle/</code> → <code>/rentals/rainbow-castle-bounce-house</code>.</li>
+          <li>Point your domain at BounceOS and verify it in Settings → Domain. Redirects go live as permanent 301s.</li>
+          <li>Resubmit the sitemap in Google Search Console and watch Coverage for two weeks. Migrate in the off-season (Oct–Feb) if you can.</li>
+        </ol>
+        <p>Want us to do it? Branch Avenue offers assisted migrations — ask your account contact.</p>
+      </div>
+      <form method="post" class="mt-4 space-y-3">
+        <input type="hidden" name="_action" value="redirects" />
+        <label class="label" for="redirects">Redirects <span class="font-normal text-ink-2">— one per line: <code>/old-path /new-path</code></span></label>
+        <textarea class="input font-mono text-xs" id="redirects" name="redirects" rows="8" placeholder="/items/rainbow-castle/ /rentals/rainbow-castle-bounce-house&#10;/category/water-slides/ /rentals/water-slides">{redirectsText}</textarea>
+        <p class="hint">{(settings.redirects ?? []).length} saved · max 500.</p>
+        {canEdit && <button class="btn-primary w-full" data-busy="Saving…">Save redirects</button>}
+      </form>
+    </section>
+  </div>
+</AppLayout>

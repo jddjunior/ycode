@@ -1,0 +1,48 @@
+---
+/**
+ * Accessible single-series column chart (inline SVG). Thin bars, 4px rounded
+ * data ends anchored to a baseline, recessive grid, hover <title> tooltips,
+ * selective direct labels (max + latest), and a data table fallback.
+ */
+interface Props { title: string; data: { label: string; value: number; display: string }[]; color?: string; height?: number; unit?: (v: number) => string }
+const { title, data, color = '#5B3CF5', height = 220, unit = (v: number) => String(v) } = Astro.props;
+const W = 720, H = height, padL = 52, padR = 8, padT = 18, padB = 26;
+const max = Math.max(1, ...data.map((d) => d.value));
+const step = (() => { const raw = max / 4, p = 10 ** Math.floor(Math.log10(raw)); const n = raw / p; return (n <= 1 ? 1 : n <= 2 ? 2 : n <= 5 ? 5 : 10) * p; })();
+const top = step * 4;
+const plotW = W - padL - padR, plotH = H - padT - padB;
+const bw = Math.min(36, (plotW / Math.max(1, data.length)) * 0.6);
+const x = (i: number) => padL + (plotW / data.length) * (i + 0.5);
+const y = (v: number) => padT + plotH - (v / top) * plotH;
+const maxIdx = data.reduce((m, d, i) => (d.value > data[m].value ? i : m), 0);
+const bar = (cx: number, v: number) => {
+  const h = Math.max(0, (v / top) * plotH), x0 = cx - bw / 2, y0 = padT + plotH - h, r = Math.min(4, h, bw / 2);
+  if (h <= 0) return '';
+  return `M${x0},${padT + plotH}V${y0 + r}Q${x0},${y0} ${x0 + r},${y0}H${x0 + bw - r}Q${x0 + bw},${y0} ${x0 + bw},${y0 + r}V${padT + plotH}Z`;
+};
+const id = 'c' + Math.abs([...title].reduce((h, c) => (h * 31 + c.charCodeAt(0)) | 0, 7)).toString(36);
+---
+<figure class="w-full">
+  <svg viewBox={`0 0 ${W} ${H}`} class="w-full h-auto" role="img" aria-labelledby={`${id}-t`}>
+    <title id={`${id}-t`}>{title}</title>
+    {[0, 1, 2, 3, 4].map((i) => (
+      <g>
+        <line x1={padL} x2={W - padR} y1={y(step * i)} y2={y(step * i)} stroke={i === 0 ? '#C9C6D9' : '#ECEAF3'} stroke-width="1" />
+        <text x={padL - 8} y={y(step * i) + 4} text-anchor="end" font-size="11" fill="#4A4866">{unit(step * i)}</text>
+      </g>
+    ))}
+    {data.map((d, i) => (
+      <g>
+        <rect x={x(i) - plotW / data.length / 2} y={padT} width={plotW / data.length} height={plotH} fill="transparent"><title>{d.label}: {d.display}</title></rect>
+        <path d={bar(x(i), d.value)} fill={color} pointer-events="none" />
+        {(i === maxIdx || i === data.length - 1) && d.value > 0 && <text x={x(i)} y={y(d.value) - 6} text-anchor="middle" font-size="11" font-weight="600" fill="#13122B">{d.display}</text>}
+        <text x={x(i)} y={H - 8} text-anchor="middle" font-size="11" fill="#4A4866">{d.label}</text>
+      </g>
+    ))}
+  </svg>
+  <details class="mt-2 text-sm">
+    <summary class="cursor-pointer text-xs font-semibold text-brand">View as table</summary>
+    <table class="table mt-2"><thead><tr><th scope="col">Period</th><th scope="col" class="text-right">Value</th></tr></thead>
+      <tbody>{data.map((d) => <tr><td>{d.label}</td><td class="text-right tabular-nums">{d.display}</td></tr>)}</tbody></table>
+  </details>
+</figure>

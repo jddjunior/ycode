@@ -1,0 +1,70 @@
+---
+/** Settings → Plan & billing (owner only): PLANS, change plan, trial status. */
+import Shell from './_Shell.astro';
+import OwnerOnly from './_OwnerOnly.astro';
+import Help from '../../../components/ops/Help.astro';
+import Icon from '../../../components/Icon.astro';
+import { formData, str, flash } from '../../../lib/forms';
+import { PLANS, planList } from '../../../lib/plans';
+import { money } from '../../../lib/pricing';
+import { opsCtx, dateOnly } from '../../../lib/ops/ctx';
+import { updateTenant } from '../../../lib/ops/settings';
+import { logActivity } from '../../../lib/ops/stats';
+import type { PlanId } from '../../../db/schema';
+
+const { t, tz, isOwner } = opsCtx(Astro);
+const f = isOwner ? await formData(Astro) : null;
+if (f && str(f, '_action', 20) === 'plan') {
+  const id = str(f, 'plan', 10) as PlanId;
+  if (id in PLANS && id !== t.plan) {
+    await updateTenant(t.id, { plan: id });
+    await logActivity(t.id, 'billing', `Plan changed to ${PLANS[id].name}`);
+    flash(Astro.cookies, `You’re on ${PLANS[id].name} now. ${PLANS[id].monthlyCents > PLANS[t.plan].monthlyCents ? 'New features are unlocked — enjoy!' : 'The change applies from your next invoice.'}`);
+  }
+  return Astro.redirect('/app/settings/billing', 303);
+}
+const cur = PLANS[t.plan] ?? PLANS.starter;
+const trialDays = t.status === 'trial' && t.trialEndsAt ? Math.max(0, Math.ceil((t.trialEndsAt.getTime() - Date.now()) / 86_400_000)) : null;
+const statusMeta: Record<string, [string, string]> = { trial: ['Free trial', 'bg-amber-100 text-amber-900'], active: ['Active', 'bg-green-100 text-green-800'], past_due: ['Payment past due', 'bg-red-100 text-red-800'], canceled: ['Canceled', 'bg-gray-100 text-gray-600'] };
+const [sl, sc] = statusMeta[t.status] ?? ['—', ''];
+---
+<Shell title="Plan & billing" subtitle="Flat monthly pricing — never per item, never per booking page." active="billing">
+  {!isOwner ? <OwnerOnly what="billing" /> : (
+    <>
+      <Help benefit="Unlimited inventory on every plan, so adding your 40th bounce house never raises your bill.">
+        <ul>
+          <li>Upgrades apply immediately; downgrades take effect from your next invoice.</li>
+          <li>Higher plans also lower your platform fee on online payments — at around {money(1_000_000)}/month in online bookings, Pro pays for itself.</li>
+        </ul>
+      </Help>
+      <section class="card p-5 flex flex-wrap items-center gap-4" aria-label="Current plan">
+        <span class="grid place-items-center size-12 rounded-2xl bg-ink text-white"><Icon name="trophy" /></span>
+        <div class="min-w-0 flex-1">
+          <p class="text-sm text-ink-2">Current plan</p>
+          <p class="text-xl font-extrabold">{cur.name} · {money(cur.monthlyCents)}/mo <span class:list={['chip align-middle ml-1', sc]}>{sl}</span></p>
+          {trialDays !== null && <p class="text-sm text-ink-2 mt-0.5">{trialDays} day{trialDays === 1 ? '' : 's'} left in your trial{t.trialEndsAt ? ` (ends ${dateOnly(t.trialEndsAt, tz)})` : ''}. No card needed until then.</p>}
+        </div>
+        {trialDays !== null && (
+          <div class="w-full sm:w-48"><div class="h-2 rounded-full bg-canvas" role="progressbar" aria-label="Trial used" aria-valuemin="0" aria-valuemax="30" aria-valuenow={30 - trialDays}><div class="h-full rounded-full bg-sun" style={`width:${Math.min(100, ((30 - trialDays) / 30) * 100)}%`}></div></div></div>
+        )}
+      </section>
+      <ul class="grid gap-4 md:grid-cols-3 mt-6">
+        {planList().map((p) => {
+          const isCur = p.id === t.plan;
+          return (
+            <li class:list={['card p-5 flex flex-col', isCur && 'ring-2 ring-brand', p.id === 'pro' && !isCur && 'border-brand/40']}>
+              <div class="flex items-center gap-2"><h2 class="font-bold text-lg">{p.name}</h2>{p.id === 'pro' && <span class="chip bg-pop text-[#1B1F4A]">Most popular</span>}{isCur && <span class="chip bg-brand-soft text-brand ml-auto">Current</span>}</div>
+              <p class="mt-2"><span class="text-3xl font-extrabold tabular-nums">{money(p.monthlyCents)}</span><span class="text-ink-2">/mo</span></p>
+              <p class="text-xs text-ink-2">{(p.platformFeeBps / 100).toFixed(2)}% platform fee · {p.limits.users ?? 'Unlimited'} users · {p.limits.cityPages ?? 'Unlimited'} city pages</p>
+              <ul class="mt-4 space-y-1.5 text-sm flex-1">{p.features.map((x) => <li class="flex gap-2"><Icon name="check" size={16} class="text-mint shrink-0 mt-0.5" />{x}</li>)}</ul>
+              <form method="post" class="mt-5" data-confirm={isCur ? undefined : `Switch to ${p.name} (${money(p.monthlyCents)}/mo)?`}>
+                <input type="hidden" name="_action" value="plan" /><input type="hidden" name="plan" value={p.id} />
+                <button class:list={['w-full', isCur ? 'btn-ghost' : p.monthlyCents > cur.monthlyCents ? 'btn-primary' : 'btn-ghost']} disabled={isCur}>{isCur ? 'Your plan' : p.monthlyCents > cur.monthlyCents ? `Upgrade to ${p.name}` : `Switch to ${p.name}`}</button>
+              </form>
+            </li>
+          );
+        })}
+      </ul>
+    </>
+  )}
+</Shell>

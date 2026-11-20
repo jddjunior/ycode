@@ -1,0 +1,18 @@
+---
+/** Result strip for an SSR date search: rule message, open count and the delivery fee for the ZIP. */
+import type { ssrAvailability } from '../../lib/site/data';
+import { hourLabel } from '../../lib/site/data';
+import { money } from '../../lib/pricing';
+interface Props { av: NonNullable<Awaited<ReturnType<typeof ssrAvailability>>>; open: number }
+const { av, open } = Astro.props;
+const z = av.zone;
+---
+<div data-ssr-avail class="s-card p-4 sm:p-5 flex flex-col sm:flex-row sm:items-center gap-3 justify-between" role="status">
+  <p class="font-display text-lg font-bold">{av.dayLabel} · {hourLabel(av.startHour)}–{hourLabel(av.endHour)}</p>
+  <div class="flex flex-wrap gap-2">
+    {av.message ? <span class="s-chip s-chip-warn whitespace-normal">{av.message}</span> : <span class="s-chip s-chip-ok">● {open} open for your date</span>}
+    {z && z.known && (z.deliverable
+      ? <span class="s-chip">{z.feeCents ? `${money(z.feeCents)} delivery to ${av.zip}` : `Free delivery to ${av.zip}`}{z.minOrderCents ? ` · ${money(z.minOrderCents)} min` : ''}</span>
+      : <span class="s-chip s-chip-bad">Outside our online delivery area — text us</span>)}
+  </div>
+</div>

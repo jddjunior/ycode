@@ -1,0 +1,16 @@
+---
+import type { Review } from '../../lib/site/data';
+import Stars from './Stars.astro';
+interface Props { review: Review }
+const { review: r } = Astro.props;
+const src = { google: 'Google', facebook: 'Facebook', yelp: 'Yelp', direct: 'Verified customer' }[r.source];
+const initials = r.author.split(/\s+/).map((w) => w[0]).join('').slice(0, 2).toUpperCase();
+---
+<figure class="s-card p-5 sm:p-6 flex flex-col gap-3 h-full">
+  <Stars rating={r.rating} />
+  <blockquote class="text-[15px] leading-relaxed flex-1">“{r.body}”</blockquote>
+  <figcaption class="flex items-center gap-3 pt-2">
+    <span class="grid place-items-center size-10 rounded-full bg-soft text-primary font-extrabold text-sm" aria-hidden="true">{initials}</span>
+    <span class="leading-tight"><span class="block font-extrabold text-sm">{r.author}</span><span class="block text-xs s-sub">{src} · {new Intl.DateTimeFormat('en-US', { month: 'short', year: 'numeric' }).format(r.createdAt)}</span></span>
+  </figcaption>
+</figure>

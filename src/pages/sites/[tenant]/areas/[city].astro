@@ -1,0 +1,30 @@
+---
+import SiteLayout from '../../../../layouts/SiteLayout.astro';
+import Blocks from '../../../../components/site/Blocks.astro';
+import Breadcrumbs from '../../../../components/site/Breadcrumbs.astro';
+import NotFound from '../../../../components/site/NotFound.astro';
+import { loadSiteCtx, loadPage } from '../../../../lib/site/data';
+import { cityBlocks, cityFacts } from '../../../../lib/provision';
+import { breadcrumbLd, faqLd } from '../../../../lib/seo';
+
+const ctx = await loadSiteCtx(Astro.locals, Astro.params.tenant);
+if (!ctx) return new Response('Not found', { status: 404 });
+const t = ctx.tenant;
+const page = await loadPage(t.id, String(Astro.params.city ?? ''), ['city']);
+if (!page) Astro.response.status = 404;
+const local = page ? (page.local ?? cityFacts(page.title, t.state)) : null;
+const city = local?.city ?? '';
+const blocks = page?.blocks?.length ? page.blocks : cityBlocks(city);
+const faqs = local?.faqs ?? [];
+const n = ctx.rating.count;
+const title = page?.seoTitle ?? `${city} Bounce House Rentals — Delivery & Setup Included${n >= 5 ? ` | ${n}+ 5★ Reviews` : ''}`;
+const crumbs = [{ name: 'Home', url: ctx.abs('/') }, { name: 'Service areas', url: ctx.abs('/areas') }, { name: city, url: ctx.abs(`/areas/${page?.slug}`) }];
+---
+<SiteLayout ctx={ctx} title={page ? title : 'Area not found'} rawTitle={!!page && !page.seoTitle && title.length > 50} description={page?.seoDescription ?? undefined} noindex={!page} ld={page ? [breadcrumbLd(crumbs), faqLd(faqs)] : []}>
+  {page ? (
+    <>
+      <div class="s-wrap pt-4 -mb-2 relative z-10"><Breadcrumbs crumbs={[{ name: 'Home', href: ctx.href('/') }, { name: 'Service areas', href: ctx.href('/areas') }, { name: city }]} /></div>
+      <Blocks ctx={ctx} blocks={blocks} local={local} pageSlug={page.slug} extraFaqs={faqs} />
+    </>
+  ) : <NotFound ctx={ctx} what="service area" />}
+</SiteLayout>

@@ -1,0 +1,114 @@
+---
+/** Settings → Coupons CRUD. */
+import { and, desc, eq, sql } from 'drizzle-orm';
+import { z } from 'zod';
+import Shell from './_Shell.astro';
+import Help from '../../../components/ops/Help.astro';
+import Err from '../../../components/ops/Err.astro';
+import Empty from '../../../components/ops/Empty.astro';
+import Icon from '../../../components/Icon.astro';
+import { getDb, schema } from '../../../db/client';
+import { formData, str, flash, parse } from '../../../lib/forms';
+import { money } from '../../../lib/pricing';
+import { opsCtx, isUuid, isValidDay, dateOnly } from '../../../lib/ops/ctx';
+import { zonedToUtc } from '../../../lib/time';
+
+const { t, tz, today, canManage } = opsCtx(Astro);
+const db = await getDb();
+const K = schema.coupons;
+let errors: Record<string, string> = {};
+let draft = { code: '', type: 'amount', value: '', maxUses: '', expires: '' };
+
+const f = await formData(Astro);
+if (f && canManage) {
+  const action = str(f, '_action', 20);
+  const id = str(f, 'id', 40);
+  if ((action === 'toggle' || action === 'delete') && isUuid(id)) {
+    const where = and(eq(K.id, id), eq(K.tenantId, t.id));
+    if (action === 'toggle') await db.update(K).set({ active: sql`not ${K.active}` }).where(where);
+    else await db.delete(K).where(where);
+    flash(Astro.cookies, action === 'toggle' ? 'Coupon updated.' : 'Coupon deleted.');
+    return Astro.redirect('/app/settings/coupons', 303);
+  }
+  if (action === 'add') {
+    draft = { code: str(f, 'code', 30).toUpperCase().replace(/\s+/g, ''), type: str(f, 'type', 10) === 'percent' ? 'percent' : 'amount', value: str(f, 'value', 10), maxUses: str(f, 'maxUses', 6), expires: str(f, 'expires', 10) };
+    const r = parse(z.object({
+      code: z.string().regex(/^[A-Z0-9_-]{3,30}$/, '3–30 letters or numbers'),
+      value: z.string().refine((x) => { const n = Number(x.replace(/[$%]/g, '')); return Number.isFinite(n) && n > 0 && (draft.type !== 'percent' || n <= 100); }, draft.type === 'percent' ? 'Percent must be 1–100' : 'Enter a dollar amount'),
+      maxUses: z.string().refine((x) => x === '' || (Number.isInteger(Number(x)) && Number(x) > 0), 'Whole number, or blank for unlimited'),
+      expires: z.string().refine((x) => x === '' || (isValidDay(x) && x >= today), 'Pick a future date'),
+    }), draft);
+    if (!r.ok) errors = r.errors;
+    else {
+      const n = Number(draft.value.replace(/[$%]/g, ''));
+      try {
+        await db.insert(K).values({ tenantId: t.id, code: draft.code, percentOff: draft.type === 'percent' ? Math.round(n) : null, amountOffCents: draft.type === 'amount' ? Math.round(n * 100) : null,
+          maxUses: draft.maxUses ? Number(draft.maxUses) : null, expiresAt: draft.expires ? zonedToUtc(draft.expires, 23, 59, tz) : null, active: true });
+        flash(Astro.cookies, `Coupon ${draft.code} is live. Share it in a campaign or on social!`);
+        return Astro.redirect('/app/settings/coupons?added=' + encodeURIComponent(draft.code), 303);
+      } catch { errors = { code: 'You already have a coupon with that code.' }; }
+    }
+  }
+}
+const rows = await db.select().from(K).where(eq(K.tenantId, t.id)).orderBy(desc(K.active), K.code);
+const added = Astro.url.searchParams.get('added');
+const inv = (k: string) => (errors[k] ? { 'aria-invalid': 'true' as const, 'aria-describedby': `${k}-err` } : {});
+const status = (c: typeof rows[number]) => !c.active ? ['Paused', 'bg-gray-100 text-gray-600'] : c.expiresAt && c.expiresAt < new Date() ? ['Expired', 'bg-gray-100 text-gray-600'] : c.maxUses != null && c.uses >= c.maxUses ? ['Used up', 'bg-gray-100 text-gray-600'] : ['Active', 'bg-green-100 text-green-800'];
+---
+<Shell title="Coupons" subtitle="Promo codes for campaigns, repeat customers and slow weekdays." active="coupons">
+  <Help benefit="Fill slow dates on purpose: a weekday code in a text blast turns empty inventory into bookings without discounting your busy Saturdays.">
+    <ul>
+      <li>Percent coupons apply to the rentals subtotal; dollar coupons never exceed it.</li>
+      <li>Set <strong>max uses</strong> for “first 10 customers” urgency, and an expiry to create a deadline.</li>
+      <li>Codes work online and in the phone booking builder. Pause a code any time without deleting its history.</li>
+    </ul>
+  </Help>
+  {added && (
+    <div class="card p-4 mb-6 border-green-200 bg-green-50 flex flex-wrap items-center gap-3" role="status">
+      <span class="grid place-items-center size-9 rounded-full bg-mint text-white"><Icon name="check" size={18} /></span>
+      <p class="text-sm flex-1"><strong>{added}</strong> is ready. Next: put it in front of customers.</p>
+      <a href="/app/marketing" class="btn-primary !min-h-9 text-xs">Send in a campaign</a>
+      <a href="/app/social" class="btn-ghost !min-h-9 text-xs">Post on social</a>
+    </div>
+  )}
+  {canManage && (
+    <form method="post" class="card p-5" novalidate>
+      <input type="hidden" name="_action" value="add" />
+      <h2 class="font-bold text-lg">New coupon</h2>
+      <div class="grid gap-3 sm:grid-cols-[1fr_150px_120px_120px_160px] mt-3 items-start">
+        <div><label class="label" for="code">Code</label><input id="code" name="code" class="input uppercase font-mono" placeholder="WEEKDAY20" value={draft.code} {...inv('code')} /><Err id="code-err" msg={errors.code} /></div>
+        <div><label class="label" for="type">Discount</label><select id="type" name="type" class="input"><option value="amount" selected={draft.type === 'amount'}>$ off</option><option value="percent" selected={draft.type === 'percent'}>% off</option></select></div>
+        <div><label class="label" for="value">Amount</label><input id="value" name="value" class="input tabular-nums" inputmode="decimal" placeholder="25" value={draft.value} {...inv('value')} /><Err id="value-err" msg={errors.value} /></div>
+        <div><label class="label" for="maxUses">Max uses</label><input id="maxUses" name="maxUses" class="input" inputmode="numeric" placeholder="∞" value={draft.maxUses} {...inv('maxUses')} /><Err id="maxUses-err" msg={errors.maxUses} /></div>
+        <div><label class="label" for="expires">Expires</label><input id="expires" name="expires" type="date" class="input" min={today} value={draft.expires} {...inv('expires')} /><Err id="expires-err" msg={errors.expires} /></div>
+      </div>
+      <div class="flex justify-end mt-3"><button class="btn-primary" data-busy-label="Creating…"><Icon name="plus" size={16} />Create coupon</button></div>
+    </form>
+  )}
+  <div class="mt-6">
+    {rows.length === 0 ? <Empty icon="gift" title="No coupons yet" text="Create a code like WEEKDAY20 to fill quiet days, then send it in a campaign." cta={{ href: '#code', label: 'Create a coupon' }} learn={{ href: '/app/marketing', label: 'See campaigns' }} /> : (
+      <ul class="grid gap-3 sm:grid-cols-2">
+        {rows.map((c) => {
+          const [label, cls] = status(c);
+          return (
+            <li class="card p-4">
+              <div class="flex items-center gap-2">
+                <span class="font-mono font-bold text-lg tracking-wide">{c.code}</span>
+                <span class:list={['chip', cls]}>{label}</span>
+                <span class="ml-auto font-bold tabular-nums">{c.percentOff ? `${c.percentOff}% off` : money(c.amountOffCents ?? 0) + ' off'}</span>
+              </div>
+              <p class="text-xs text-ink-2 mt-1">{c.uses} use{c.uses === 1 ? '' : 's'}{c.maxUses != null ? ` of ${c.maxUses}` : ''}{c.expiresAt ? ` · expires ${dateOnly(c.expiresAt, tz)}` : ' · no expiry'}</p>
+              {c.maxUses != null && <div class="mt-2 h-1.5 rounded-full bg-canvas" aria-hidden="true"><div class="h-full rounded-full bg-brand" style={`width:${Math.min(100, (c.uses / c.maxUses) * 100)}%`}></div></div>}
+              {canManage && (
+                <div class="flex gap-2 mt-3">
+                  <form method="post"><input type="hidden" name="_action" value="toggle" /><input type="hidden" name="id" value={c.id} /><button class="btn-ghost !min-h-9 text-xs">{c.active ? 'Pause' : 'Activate'}</button></form>
+                  <form method="post" data-confirm={`Delete coupon ${c.code}? This can’t be undone.`}><input type="hidden" name="_action" value="delete" /><input type="hidden" name="id" value={c.id} /><button class="btn-danger !min-h-9 text-xs">Delete</button></form>
+                </div>
+              )}
+            </li>
+          );
+        })}
+      </ul>
+    )}
+  </div>
+</Shell>

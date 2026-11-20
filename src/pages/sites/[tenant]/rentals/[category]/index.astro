@@ -1,0 +1,74 @@
+---
+import SiteLayout from '../../../../../layouts/SiteLayout.astro';
+import ProductCard from '../../../../../components/site/ProductCard.astro';
+import SearchBox from '../../../../../components/site/SearchBox.astro';
+import DateBanner from '../../../../../components/site/DateBanner.astro';
+import Breadcrumbs from '../../../../../components/site/Breadcrumbs.astro';
+import Faq from '../../../../../components/site/blocks/Faq.astro';
+import NotFound from '../../../../../components/site/NotFound.astro';
+import { loadSiteCtx, ssrAvailability, minPrice, type Item } from '../../../../../lib/site/data';
+import { breadcrumbLd } from '../../../../../lib/seo';
+import { money } from '../../../../../lib/pricing';
+
+const ctx = await loadSiteCtx(Astro.locals, Astro.params.tenant);
+if (!ctx) return new Response('Not found', { status: 404 });
+const t = ctx.tenant;
+const cat = ctx.categories.find((c) => c.slug === Astro.params.category);
+const items = cat ? ctx.items.filter((i) => i.categoryId === cat.id && i.kind !== 'package') : [];
+if (!cat || !items.length) Astro.response.status = 404;
+const av = cat ? await ssrAvailability(t, Astro.url) : null;
+const freeOf = (i: Item) => (av ? (av.res.ok ? Math.max(0, av.res.free[i.id] ?? 0) : 0) : null);
+const sorted = av?.res.ok ? [...items].sort((a, b) => Number((freeOf(b) ?? 0) > 0) - Number((freeOf(a) ?? 0) > 0)) : items;
+const floor = minPrice(items);
+const pkgs = cat ? ctx.items.filter((i) => i.kind === 'package' && (i.categoryId === cat.id || i.bundle.some((b) => items.some((x) => x.id === b.itemId)))) : [];
+const others = ctx.categories.filter((c) => c.id !== cat?.id && ctx.items.some((i) => i.categoryId === c.id && i.kind !== 'package'));
+const name = cat?.name ?? '';
+const title = cat?.seoTitle ?? `${name} Rentals ${t.city}, ${t.state}${floor ? ` — From ${money(floor)}` : ''}`;
+const desc = cat?.seoDescription ?? `${name} for rent in ${t.city}${floor ? ` from ${money(floor)}` : ''}. Live availability for your date, delivery, setup & pickup included. Book online in 2 minutes${t.phone ? ` or text ${t.phone}` : ''}.`;
+const faqs = cat ? [
+  { q: `How much does a ${name.toLowerCase().replace(/s$/, '')} rental cost in ${t.city}?`, a: `Our ${name.toLowerCase()} start at ${money(floor ?? 0)} for up to ${items[0]?.baseHours ?? 8} hours, including delivery, setup and pickup in our local zone. Your exact delivery fee shows as soon as you enter your ZIP.` },
+  { q: 'How far ahead should I book?', a: 'Weekend dates fill first — most families book 2–4 weeks ahead. Weekday and same-week openings show up live when you pick a date.' },
+  { q: 'What happens if it’s windy or rains?', a: `We follow manufacturer wind limits (${t.settings?.windLimitMph ?? 15} mph). If it’s unsafe we reschedule free or give you a 12-month credit.` },
+] : [];
+const crumbs = [{ name: 'Home', url: ctx.abs('/') }, { name: 'Rentals', url: ctx.abs('/rentals') }, { name, url: ctx.abs(`/rentals/${cat?.slug}`) }];
+---
+<SiteLayout ctx={ctx} title={cat ? title : 'Not found'} description={desc} noindex={!cat} ld={cat ? [breadcrumbLd(crumbs)] : []}>
+  {!cat || !items.length ? <NotFound ctx={ctx} what="category" /> : (
+    <>
+      <section class="s-hero-bg">
+        <div class="s-wrap pt-8 pb-10">
+          <Breadcrumbs crumbs={[{ name: 'Home', href: ctx.href('/') }, { name: 'Rentals', href: ctx.href('/rentals') }, { name }]} />
+          <div class="mt-5 grid lg:grid-cols-[1fr_1.1fr] gap-8 items-end">
+            <div>
+              <h1 class="s-h1 !text-[clamp(2rem,5vw,3.4rem)]">{name} rentals in {t.city}</h1>
+              <p class="s-lede mt-3 max-w-xl">{cat.description} {floor ? `From ${money(floor)} — delivery, setup and pickup included.` : ''}</p>
+            </div>
+            <div id="check" class="s-card p-4 sm:p-5 scroll-mt-28">
+              <SearchBox ctx={ctx} id="cat" submitLabel="Check my date" initial={av ? { day: av.day, startHour: av.startHour, endHour: av.endHour, zip: av.zip } : undefined} />
+            </div>
+          </div>
+          {av && <div class="mt-6"><DateBanner av={av} open={items.filter((i) => (freeOf(i) ?? 0) > 0).length} /></div>}
+        </div>
+      </section>
+      <section class="s-wrap py-10">
+        <h2 class="sr-only">{name}</h2>
+        <div class="grid grid-cols-1 min-[480px]:grid-cols-2 lg:grid-cols-3 gap-4 sm:gap-5">
+          {sorted.map((it, i) => <ProductCard ctx={ctx} item={it} free={freeOf(it)} dayLabel={av?.dayLabel} eager={i < 3} />)}
+        </div>
+      </section>
+      {pkgs.length > 0 && (
+        <section class="s-wrap pb-6">
+          <h2 class="s-h2 !text-3xl">Bundle & save</h2>
+          <div class="mt-6 grid grid-cols-1 min-[480px]:grid-cols-2 lg:grid-cols-3 gap-4">{pkgs.map((it) => <ProductCard ctx={ctx} item={it} free={freeOf(it)} dayLabel={av?.dayLabel} />)}</div>
+        </section>
+      )}
+      <Faq props={{ title: `${name} FAQ` }} faqs={faqs} />
+      <section class="s-wrap pb-16">
+        <h2 class="s-h3">Popular in nearby cities</h2>
+        <ul class="mt-3 flex flex-wrap gap-2">{ctx.cities.slice(0, 8).map((c) => <li><a class="s-filter" href={ctx.href(`/areas/${c.slug}`)}>{name} in {c.local?.city ?? c.title}</a></li>)}</ul>
+        <h2 class="s-h3 mt-8">More rentals</h2>
+        <ul class="mt-3 flex flex-wrap gap-2">{others.map((c) => <li><a class="s-filter" href={ctx.href(`/rentals/${c.slug}`)}>{c.name}</a></li>)}</ul>
+      </section>
+    </>
+  )}
+</SiteLayout>

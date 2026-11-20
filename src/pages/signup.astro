@@ -1,0 +1,125 @@
+---
+import { sql } from 'drizzle-orm';
+import { z } from 'zod';
+import PlatformLayout from '../layouts/PlatformLayout.astro';
+import { getDb, schema } from '../db/client';
+import { createSession, passwordOk, PASSWORD_RULE } from '../lib/auth';
+import { provisionTenant } from '../lib/provision';
+import { formData, str, list, parse, isSecure, clientIp } from '../lib/forms';
+import { rateLimit } from '../lib/ratelimit';
+import { THEMES } from '../lib/themes';
+import { planList } from '../lib/plans';
+import { money } from '../lib/pricing';
+
+const ref = (Astro.url.searchParams.get('ref') ?? Astro.cookies.get('bos_ref')?.value ?? '').slice(0, 20);
+if (Astro.url.searchParams.get('ref')) Astro.cookies.set('bos_ref', ref, { path: '/', maxAge: 60 * 86400, sameSite: 'lax', httpOnly: true });
+if (Astro.locals.session?.tenant) return Astro.redirect('/app');
+
+const TZ = { 'America/New_York': 'Eastern', 'America/Chicago': 'Central', 'America/Denver': 'Mountain', 'America/Phoenix': 'Arizona', 'America/Los_Angeles': 'Pacific', 'America/Anchorage': 'Alaska', 'Pacific/Honolulu': 'Hawaii' };
+
+const Schema = z.object({
+  name: z.string().min(2, 'Enter your business name').max(80),
+  ownerName: z.string().max(80),
+  email: z.email('Enter a valid email'),
+  password: z.string().refine(passwordOk, PASSWORD_RULE),
+  phone: z.string().max(30),
+  city: z.string().min(2, 'Enter your city').max(60),
+  state: z.string().regex(/^[A-Za-z]{2}$/, 'Use a 2-letter state'),
+  zip: z.string().regex(/^\d{5}$/, 'Use a 5-digit ZIP'),
+  timezone: z.enum(Object.keys(TZ) as [string, ...string[]]),
+  theme: z.enum(Object.keys(THEMES) as [string, ...string[]]),
+  plan: z.enum(['starter', 'pro', 'elite']),
+});
+
+let errors: Record<string, string> = {};
+let values: Record<string, string> = { theme: 'carnival', timezone: 'America/Chicago', plan: (Astro.url.searchParams.get('plan') ?? 'pro') };
+const f = await formData(Astro);
+if (f) {
+  values = Object.fromEntries([...f.entries()].map(([k, v]) => [k, String(v)]));
+  const ip = clientIp(Astro.request, Astro.clientAddress);
+  if (!rateLimit(`signup:${ip}`, 5, 1)) errors._ = 'Too many sign-ups from this network. Try again shortly.';
+  else {
+    const r = parse(Schema, { name: str(f, 'name', 80), ownerName: str(f, 'ownerName', 80), email: str(f, 'email', 200).toLowerCase(), password: str(f, 'password', 200),
+      phone: str(f, 'phone', 30), city: str(f, 'city', 60), state: str(f, 'state', 2).toUpperCase(), zip: str(f, 'zip', 5), timezone: str(f, 'timezone'), theme: str(f, 'theme'), plan: str(f, 'plan') });
+    if (!r.ok) errors = r.errors;
+    else {
+      const db = await getDb();
+      const [taken] = await db.select({ id: schema.users.id }).from(schema.users).where(sql`lower(${schema.users.email}) = ${r.data.email}`).limit(1);
+      if (taken) errors.email = 'That email already has an account — sign in instead.';
+      else {
+        const { tenant, user } = await provisionTenant({ ...r.data, theme: r.data.theme as keyof typeof THEMES, plan: r.data.plan as 'pro', serviceCities: list(f, 'serviceCities').slice(0, 10), referralCode: ref || null });
+        await createSession(user.id, tenant.id, Astro.cookies, isSecure(Astro.url));
+        Astro.cookies.delete('bos_ref', { path: '/' });
+        return Astro.redirect('/app?welcome=1');
+      }
+    }
+  }
+}
+---
+<PlatformLayout title="Start your free trial · BounceOS" description="Launch your bounce house rental website with live online booking in 5 minutes. 30-day free trial, no credit card.">
+  <section class="max-w-5xl mx-auto px-4 py-12 grid lg:grid-cols-[1fr_380px] gap-10">
+    <div>
+      <p class="chip bg-brand-soft text-brand">30 days free · no credit card</p>
+      <h1 class="text-3xl sm:text-4xl font-extrabold mt-3">Launch your rental business on BounceOS</h1>
+      <p class="text-ink-2 mt-2">Answer a few questions and we’ll build your SEO website, booking engine and city pages in seconds.</p>
+      <form method="post" class="card p-6 mt-6 space-y-5" novalidate>
+        {errors._ && <p role="alert" class="rounded-lg bg-red-50 text-red-800 text-sm px-3 py-2">{errors._}</p>}
+        <fieldset class="grid sm:grid-cols-2 gap-4">
+          <legend class="text-sm font-bold mb-2 col-span-full">Your business</legend>
+          <div class="sm:col-span-2"><label class="label" for="name">Business name</label><input class="input" id="name" name="name" value={values.name} required maxlength="80" placeholder="e.g. Jumping Jacks Party Rentals" />{errors.name && <p class="text-xs text-danger mt-1">{errors.name}</p>}</div>
+          <div><label class="label" for="city">City</label><input class="input" id="city" name="city" value={values.city} required />{errors.city && <p class="text-xs text-danger mt-1">{errors.city}</p>}</div>
+          <div class="grid grid-cols-2 gap-3">
+            <div><label class="label" for="state">State</label><input class="input uppercase" id="state" name="state" value={values.state} maxlength="2" required placeholder="TX" />{errors.state && <p class="text-xs text-danger mt-1">{errors.state}</p>}</div>
+            <div><label class="label" for="zip">ZIP</label><input class="input" id="zip" name="zip" value={values.zip} inputmode="numeric" maxlength="5" required />{errors.zip && <p class="text-xs text-danger mt-1">{errors.zip}</p>}</div>
+          </div>
+          <div><label class="label" for="phone">Business phone</label><input class="input" id="phone" name="phone" type="tel" value={values.phone} /></div>
+          <div><label class="label" for="timezone">Time zone</label>
+            <select class="input" id="timezone" name="timezone">{Object.entries(TZ).map(([k, v]) => <option value={k} selected={values.timezone === k}>{v}</option>)}</select></div>
+          <div class="sm:col-span-2"><label class="label" for="serviceCities">Other cities you serve <span class="text-ink-2 font-normal">(optional, comma separated)</span></label>
+            <input class="input" id="serviceCities" name="serviceCities" value={values.serviceCities} placeholder="Katy, Sugar Land, Pearland" /><p class="hint">We’ll create a local landing page for each one.</p></div>
+        </fieldset>
+        <fieldset>
+          <legend class="text-sm font-bold mb-2">Pick a look (you can change it anytime)</legend>
+          <div class="grid sm:grid-cols-2 gap-3">
+            {Object.entries(THEMES).map(([k, th]) => (
+              <label class="card p-3 flex gap-3 cursor-pointer has-[:checked]:ring-2 has-[:checked]:ring-brand">
+                <input type="radio" name="theme" value={k} checked={values.theme === k} class="mt-1 accent-[var(--color-brand)]" />
+                <span class="min-w-0"><span class="flex gap-1 mb-1">{[th.primary, th.accent, th.paper, th.ink].map((c) => <span class="size-4 rounded-full border border-line" style={`background:${c}`}></span>)}</span>
+                  <span class="block font-semibold text-sm">{th.label}</span><span class="block text-xs text-ink-2">{th.mood}</span></span>
+              </label>
+            ))}
+          </div>
+        </fieldset>
+        <fieldset>
+          <legend class="text-sm font-bold mb-2">Plan (free for 30 days)</legend>
+          <div class="grid sm:grid-cols-3 gap-3">
+            {planList().map((p) => (
+              <label class="card p-3 cursor-pointer has-[:checked]:ring-2 has-[:checked]:ring-brand">
+                <input type="radio" name="plan" value={p.id} checked={values.plan === p.id} class="accent-[var(--color-brand)]" />
+                <span class="font-semibold text-sm ml-1">{p.name}</span>
+                <span class="block text-xs text-ink-2 mt-1">{money(p.monthlyCents)}/mo · {(p.platformFeeBps / 100).toFixed(1)}% booking fee</span>
+              </label>
+            ))}
+          </div>
+        </fieldset>
+        <fieldset class="grid sm:grid-cols-2 gap-4">
+          <legend class="text-sm font-bold mb-2 col-span-full">Your login</legend>
+          <div><label class="label" for="ownerName">Your name</label><input class="input" id="ownerName" name="ownerName" value={values.ownerName} autocomplete="name" /></div>
+          <div><label class="label" for="email">Email</label><input class="input" id="email" name="email" type="email" value={values.email} autocomplete="email" required />{errors.email && <p class="text-xs text-danger mt-1">{errors.email}</p>}</div>
+          <div class="sm:col-span-2"><label class="label" for="password">Password</label><input class="input" id="password" name="password" type="password" autocomplete="new-password" minlength="10" required /><p class="hint">{PASSWORD_RULE}</p>{errors.password && <p class="text-xs text-danger mt-1">{errors.password}</p>}</div>
+        </fieldset>
+        {ref && <p class="text-sm text-mint font-medium">Referral code <strong>{ref}</strong> applied.</p>}
+        <button class="btn-pop w-full text-base">Build my site & booking engine</button>
+      </form>
+    </div>
+    <aside class="space-y-4 lg:pt-24">
+      <div class="card p-5">
+        <p class="font-bold">What you get in 60 seconds</p>
+        <ul class="mt-3 space-y-2 text-sm text-ink-2">
+          {['A fast, SEO-optimized website on your own domain', 'Live, date-first availability & online deposits', 'City landing pages for every area you serve', 'E-signed rental agreements & weather-safe policy', 'Route planner + crew app', 'Review requests, birthday re-book campaigns, AI social posts & ad builder'].map((x) => <li class="flex gap-2"><span class="text-mint">✓</span>{x}</li>)}
+        </ul>
+      </div>
+      <div class="card p-5 text-sm text-ink-2"><p class="font-bold text-ink">Switching software?</p><p class="mt-1">We migrate your inventory and set up redirects so you keep your Google rankings — free.</p></div>
+    </aside>
+  </section>
+</PlatformLayout>

@@ -1,0 +1,88 @@
+---
+import { eq } from 'drizzle-orm';
+import { z } from 'zod';
+import Shell from './_Shell.astro';
+import { getDb, schema } from '../../db/client';
+import type { PlanId } from '../../db/schema';
+import { formData, str, flash } from '../../lib/forms';
+import { money } from '../../lib/pricing';
+import { PLANS } from '../../lib/plans';
+import { siteOrigin, invalidateTenantCache } from '../../lib/tenant';
+import { formatLocal } from '../../lib/time';
+import { tenantTable } from '../../lib/growth/hq';
+
+const PLAN_IDS = Object.keys(PLANS) as [PlanId, ...PlanId[]];
+const STATUSES = ['trial', 'active', 'past_due', 'canceled'] as const;
+const Upd = z.object({ id: z.uuid(), plan: z.enum(PLAN_IDS), status: z.enum(STATUSES) });
+
+const f = await formData(Astro);
+if (f) {
+  const r = Upd.safeParse({ id: str(f, 'id', 40), plan: str(f, 'plan', 10), status: str(f, 'status', 10) });
+  if (!r.success) { flash(Astro.cookies, 'Invalid plan or status.', 'error'); return Astro.redirect('/hq/tenants', 303); }
+  const db = await getDb();
+  const [t] = await db.update(schema.tenants).set({ plan: r.data.plan, status: r.data.status, updatedAt: new Date() }).where(eq(schema.tenants.id, r.data.id)).returning();
+  if (t) await db.insert(schema.activity).values({ tenantId: t.id, kind: 'billing', message: `Branch Avenue updated your plan to ${PLANS[t.plan].name} (${t.status}).`, data: { by: Astro.locals.session?.user.email } });
+  invalidateTenantCache();
+  flash(Astro.cookies, t ? `${t.name}: ${PLANS[t.plan].name} · ${t.status}.` : 'Tenant not found.', t ? 'ok' : 'error');
+  return Astro.redirect('/hq/tenants' + Astro.url.search, 303);
+}
+
+const q = (Astro.url.searchParams.get('q') ?? '').toLowerCase().trim().slice(0, 60);
+const statusF = STATUSES.find((s) => s === Astro.url.searchParams.get('status'));
+let rows = await tenantTable();
+if (q) rows = rows.filter((r) => `${r.t.name} ${r.t.slug} ${r.t.city} ${r.t.email}`.toLowerCase().includes(q));
+if (statusF) rows = rows.filter((r) => r.t.status === statusF);
+const origins = new Map(await Promise.all(rows.map(async (r) => [r.t.id, await siteOrigin(r.t)] as const)));
+const ST: Record<string, string> = { trial: 'bg-sun/30 text-[#7A5200]', active: 'bg-green-50 text-green-800', past_due: 'bg-red-50 text-red-800', canceled: 'bg-canvas text-ink-2' };
+const ago = (d: Date | null) => { if (!d) return '—'; const h = (Date.now() - d.getTime()) / 3_600_000; return h < 1 ? 'just now' : h < 24 ? `${Math.round(h)}h ago` : `${Math.round(h / 24)}d ago`; };
+---
+<Shell title="Tenants" active="tenants" subtitle={`${rows.length} operator${rows.length === 1 ? '' : 's'} · sorted by GMV`}>
+  <form method="get" class="flex flex-wrap gap-2 mb-4" role="search">
+    <label class="sr-only" for="q">Search tenants</label>
+    <input class="input max-w-xs bg-white" id="q" name="q" value={q} placeholder="Name, city, email" />
+    <label class="sr-only" for="status">Status</label>
+    <select class="input w-auto bg-white" id="status" name="status"><option value="">All statuses</option>{STATUSES.map((s) => <option value={s} selected={statusF === s}>{s.replace('_', ' ')}</option>)}</select>
+    <button class="btn-ghost">Filter</button>
+  </form>
+
+  <!-- Mobile cards -->
+  <ul class="grid gap-3 md:hidden">
+    {rows.map((r) => (
+      <li class="card p-4">
+        <div class="flex items-start gap-2"><div class="min-w-0 flex-1"><a class="font-bold hover:text-brand" href={origins.get(r.t.id) + '/'} target="_blank" rel="noopener">{r.t.name}</a><p class="text-xs text-ink-2">{r.t.city}, {r.t.state} · {r.t.email}</p></div><span class:list={['chip', ST[r.t.status]]}>{r.t.status.replace('_', ' ')}</span></div>
+        <dl class="mt-3 grid grid-cols-3 gap-2 text-center text-xs"><div class="rounded-lg bg-canvas p-2"><dt class="text-ink-2">GMV</dt><dd class="font-bold text-sm">{money(r.gmv)}</dd></div><div class="rounded-lg bg-canvas p-2"><dt class="text-ink-2">Bookings</dt><dd class="font-bold text-sm">{r.bookings}</dd></div><div class="rounded-lg bg-canvas p-2"><dt class="text-ink-2">Active</dt><dd class="font-bold text-sm">{ago(r.lastActivity)}</dd></div></dl>
+        <form method="post" class="mt-3 flex gap-2" data-confirm={`Change plan/status for ${r.t.name}?`}>
+          <input type="hidden" name="id" value={r.t.id} />
+          <select class="input min-h-10" name="plan" aria-label="Plan">{PLAN_IDS.map((p) => <option value={p} selected={r.t.plan === p}>{PLANS[p].name}</option>)}</select>
+          <select class="input min-h-10" name="status" aria-label="Status">{STATUSES.map((s) => <option value={s} selected={r.t.status === s}>{s.replace('_', ' ')}</option>)}</select>
+          <button class="btn-primary min-h-10 px-3">Save</button>
+        </form>
+      </li>
+    ))}
+  </ul>
+
+  <div class="card relative overflow-x-auto hidden md:block">
+    <table class="table min-w-[980px]">
+      <thead><tr><th>Operator</th><th class="text-right">GMV</th><th class="text-right">Bookings</th><th class="text-right">BA revenue</th><th>Last activity</th><th>Plan & status</th></tr></thead>
+      <tbody>
+        {rows.map((r) => (
+          <tr>
+            <td><a class="font-semibold hover:text-brand" href={origins.get(r.t.id) + '/'} target="_blank" rel="noopener">{r.t.name}</a><p class="text-xs text-ink-2">{r.t.city}, {r.t.state} · {r.t.email} · since {formatLocal(r.t.createdAt, 'UTC', { month: 'short', year: 'numeric' })}{r.t.marketplaceListed ? ' · listed' : ''}</p></td>
+            <td class="text-right tabular-nums font-semibold">{money(r.gmv)}</td>
+            <td class="text-right tabular-nums">{r.bookings}</td>
+            <td class="text-right tabular-nums">{money(r.fees)}</td>
+            <td class="whitespace-nowrap text-ink-2">{ago(r.lastActivity)}</td>
+            <td>
+              <form method="post" class="flex items-center gap-1.5" data-confirm={`Change plan/status for ${r.t.name}?`}>
+                <input type="hidden" name="id" value={r.t.id} />
+                <select class="input min-h-9 w-auto text-xs" name="plan" aria-label={`Plan for ${r.t.name}`}>{PLAN_IDS.map((p) => <option value={p} selected={r.t.plan === p}>{PLANS[p].name} · {money(PLANS[p].monthlyCents).replace('.00', '')}</option>)}</select>
+                <select class:list={['input min-h-9 w-auto text-xs font-semibold', ST[r.t.status]]} name="status" aria-label={`Status for ${r.t.name}`}>{STATUSES.map((s) => <option value={s} selected={r.t.status === s}>{s.replace('_', ' ')}</option>)}</select>
+                <button class="btn-ghost min-h-9 px-3 text-xs">Save</button>
+              </form>
+            </td>
+          </tr>
+        ))}
+      </tbody>
+    </table>
+  </div>
+</Shell>

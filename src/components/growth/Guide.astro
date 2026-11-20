@@ -1,0 +1,22 @@
+---
+/** "Why this matters" benefit line + collapsible "How it works & tips" panel. Default slot = tips (li elements). */
+import Icon from '../Icon.astro';
+interface Props { why: string; title?: string; open?: boolean; learnHref?: string }
+const { why, title = 'How it works & tips', open = false, learnHref } = Astro.props;
+---
+<div class="mb-5 rounded-2xl border border-line bg-white/70">
+  <div class="flex items-start gap-3 px-4 py-3">
+    <span class="grid place-items-center size-8 rounded-xl bg-sun/25 text-[#7A5200] shrink-0"><Icon name="bolt" size={16} /></span>
+    <p class="text-sm text-ink-2 pt-1"><span class="font-semibold text-ink">Why this matters:</span> {why}</p>
+  </div>
+  <details class="group border-t border-line" open={open}>
+    <summary class="flex items-center gap-2 px-4 py-2.5 text-sm font-semibold cursor-pointer list-none text-brand">
+      <Icon name="sparkle" size={16} />{title}
+      <Icon name="arrow" size={14} class="ml-auto transition-transform group-open:rotate-90 text-ink-2" />
+    </summary>
+    <ul class="px-4 pb-4 grid gap-2 sm:grid-cols-2 text-sm text-ink-2 [&>li]:flex [&>li]:gap-2 [&>li]:before:content-['✓'] [&>li]:before:text-mint [&>li]:before:font-bold">
+      <slot />
+    </ul>
+    {learnHref && <p class="px-4 pb-3 -mt-1 text-xs"><a class="text-brand font-semibold" href={learnHref}>Learn more →</a></p>}
+  </details>
+</div>

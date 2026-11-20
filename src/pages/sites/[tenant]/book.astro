@@ -1,0 +1,53 @@
+---
+/** Checkout (noindex). Guest checkout hosted on the operator's own domain. */
+import SiteLayout from '../../../layouts/SiteLayout.astro';
+import Checkout from '../../../islands/site/Checkout';
+import Icon from '../../../components/Icon.astro';
+import { loadSiteCtx, bookableDays, depositText, agreementText, firstImage, telHref, smsHref } from '../../../lib/site/data';
+import { miniMarkdown } from '../../../lib/util';
+import { money } from '../../../lib/pricing';
+import { DEFAULT_SETTINGS } from '../../../lib/provision';
+
+const ctx = await loadSiteCtx(Astro.locals, Astro.params.tenant);
+if (!ctx) return new Response('Not found', { status: 404 });
+const t = ctx.tenant;
+const s = t.settings ?? {};
+const d = bookableDays(t);
+const items = ctx.items.map((i) => ({
+  id: i.id, slug: i.slug, name: i.name, kind: i.kind, priceCents: i.priceCents, baseHours: i.baseHours, extraHourCents: i.extraHourCents,
+  image: firstImage(i), href: ctx.href(ctx.itemPath(i)), upsellIds: i.upsellIds, bundle: i.bundle, isWet: i.isWet, tagline: i.tagline,
+}));
+const surfaces = s.surfaces?.length ? s.surfaces : DEFAULT_SETTINGS.surfaces!;
+const help = [
+  { q: 'Why a deposit?', a: `${depositText(t, money)} so nobody else can book your items. The rest is due on delivery — card, cash or check.` },
+  { q: 'What’s the damage waiver?', a: 'Optional coverage for accidental damage (a ripped seam, a spilled drink) up to the rental value. It doesn’t cover negligence or theft.' },
+  { q: 'What if the weather is bad?', a: `If wind is over ${s.windLimitMph ?? 15} mph, or there’s rain or lightning, we reschedule free or give you a 12-month credit. You never lose your deposit to weather.` },
+  { q: 'Can I change or cancel?', a: s.cancellationPolicy ?? 'Yes — contact us and we’ll help.' },
+];
+---
+<SiteLayout ctx={ctx} title="Checkout" noindex>
+  <section class="s-wrap pt-6 pb-16">
+    <div class="flex flex-wrap items-center justify-between gap-3 mb-6">
+      <a href={ctx.href('/rentals')} class="inline-flex items-center gap-1.5 font-bold min-h-11 hover:underline">← Keep shopping</a>
+      <p class="flex items-center gap-2 text-sm font-bold"><Icon name="shield" size={18} class="text-primary" /> Secure checkout · No account needed</p>
+    </div>
+    <h1 class="sr-only">Book your party rentals</h1>
+    <Checkout client:load slug={t.slug} api={ctx.api} base={ctx.base} minDay={d.minDay} maxDay={d.maxDay} defaultStart={d.defaultStart} defaultEnd={d.defaultEnd}
+      phone={t.phone} tenantName={t.name} state={t.state} city={t.city} items={items} surfaces={surfaces}
+      waiverBps={s.damageWaiverBps ?? 0} waiverDefaultOn={!!s.damageWaiverDefaultOn} agreementHtml={miniMarkdown(agreementText(t))}
+      cancellationPolicy={s.cancellationPolicy ?? ''} holdMinutes={s.holdMinutes ?? 30} depositText={depositText(t, money)}
+      canceled={Astro.url.searchParams.get('canceled') === '1'} help={help} />
+  </section>
+  <section class="s-wrap pb-16">
+    <div class="s-tile p-5 sm:p-6 flex flex-col sm:flex-row gap-4 sm:items-center justify-between">
+      <div>
+        <p class="font-display text-lg font-bold">Rather book with a person?</p>
+        <p class="s-sub text-sm">We answer texts fast — send your date, ZIP and what you’re eyeing.</p>
+      </div>
+      {t.phone && <div class="flex gap-2">
+        <a href={smsHref(t.phone)} class="s-btn s-btn-primary"><Icon name="message" size={18} /> Text</a>
+        <a href={telHref(t.phone)} class="s-btn s-btn-ghost"><Icon name="phone" size={18} /> {t.phone}</a>
+      </div>}
+    </div>
+  </section>
+</SiteLayout>

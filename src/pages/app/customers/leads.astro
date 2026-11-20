@@ -1,0 +1,150 @@
+---
+/** Leads pipeline: new → contacted → quoted → won/lost (abandoned checkouts, quote requests, marketplace, phone). */
+import { and, desc, eq } from 'drizzle-orm';
+import { z } from 'zod';
+import AppLayout from '../../../layouts/AppLayout.astro';
+import Icon from '../../../components/Icon.astro';
+import Tabs from './_Tabs.astro';
+import Help from '../../../components/ops/Help.astro';
+import Empty from '../../../components/ops/Empty.astro';
+import SubmitGuard from '../../../components/ops/SubmitGuard.astro';
+import { getDb, schema } from '../../../db/client';
+import { money } from '../../../lib/pricing';
+import { formData, str, flash, parse } from '../../../lib/forms';
+import { opsCtx, isUuid, isValidDay, STAGES, STAGE_META, shortDay, dateOnly } from '../../../lib/ops/ctx';
+import { logActivity } from '../../../lib/ops/stats';
+
+const { t, tz, today, canManage } = opsCtx(Astro);
+const db = await getDb();
+const L = schema.leads;
+const source = Astro.url.searchParams.get('source') ?? '';
+
+const f = await formData(Astro);
+if (f && canManage) {
+  const action = str(f, '_action', 20);
+  const id = str(f, 'id', 40);
+  if (action === 'stage' && isUuid(id)) {
+    const stage = STAGES.find((s) => s === str(f, 'stage', 12));
+    if (stage) {
+      await db.update(L).set({ stage, ...(stage === 'contacted' ? { lastFollowUpAt: new Date() } : {}) }).where(and(eq(L.id, id), eq(L.tenantId, t.id)));
+      flash(Astro.cookies, `Lead moved to ${STAGE_META[stage].label}.`);
+    }
+  } else if (action === 'add') {
+    const r = parse(z.object({ name: z.string().min(2, 'Name is required'), email: z.union([z.literal(''), z.email('Enter a valid email')]), phone: z.string().max(40) }), { name: str(f, 'name', 120), email: str(f, 'email', 200), phone: str(f, 'phone', 40) });
+    if (!r.ok) flash(Astro.cookies, Object.values(r.errors)[0], 'error');
+    else {
+      const ev = str(f, 'eventDate', 10);
+      await db.insert(L).values({ tenantId: t.id, ...r.data, eventDate: isValidDay(ev) ? ev : null, zip: str(f, 'zip', 10), message: str(f, 'message', 2000), source: 'phone', attribution: { channel: 'direct' } });
+      await logActivity(t.id, 'lead', `New phone lead: ${r.data.name}`);
+      flash(Astro.cookies, 'Lead added.');
+    }
+  }
+  return Astro.redirect('/app/customers/leads' + (source ? `?source=${encodeURIComponent(source)}` : ''), 303);
+}
+
+const [leads, items] = await Promise.all([
+  db.select().from(L).where(eq(L.tenantId, t.id)).orderBy(desc(L.createdAt)).limit(400),
+  db.select({ id: schema.items.id, name: schema.items.name, priceCents: schema.items.priceCents }).from(schema.items).where(eq(schema.items.tenantId, t.id)),
+]);
+const itemMap = new Map(items.map((i) => [i.id, i]));
+const shown = leads.filter((l) => !source || l.source === source);
+const SOURCES: Record<string, string> = { abandoned_checkout: 'Abandoned checkout', quote_form: 'Quote request', marketplace: 'Marketplace', phone: 'Phone', partner: 'Partner' };
+const open = leads.filter((l) => ['new', 'contacted', 'quoted'].includes(l.stage)).length;
+const cartValue = (l: typeof leads[number]) => l.cart.reduce((s, c) => s + (itemMap.get(c.itemId)?.priceCents ?? 0) * c.qty, 0);
+const convertUrl = (l: typeof leads[number]) => {
+  const u = new URLSearchParams({ leadId: l.id });
+  if (l.name) u.set('name', l.name); if (l.email) u.set('email', l.email); if (l.phone) u.set('phone', l.phone);
+  if (l.zip) u.set('zip', l.zip); if (l.eventDate) u.set('date', l.eventDate);
+  if (l.cart.length) u.set('items', l.cart.map((c) => `${c.itemId}:${c.qty}`).join(','));
+  if (l.message) u.set('notes', l.message.slice(0, 500));
+  return `/app/bookings/new?${u.toString()}`;
+};
+const won = leads.filter((l) => l.stage === 'won').length, decided = won + leads.filter((l) => l.stage === 'lost').length;
+const ago = (d: Date) => { const h = Math.round((Date.now() - d.getTime()) / 3_600_000); return h < 1 ? 'just now' : h < 24 ? `${h}h ago` : `${Math.round(h / 24)}d ago`; };
+---
+<AppLayout title="Customers & Leads" section="customers" subtitle={`${open} open leads · ${decided ? Math.round((won / decided) * 100) : 0}% win rate`} wide>
+  <Fragment slot="actions">
+    {canManage && (
+      <details class="relative">
+        <summary class="btn-primary list-none cursor-pointer"><Icon name="plus" size={16} />Add lead</summary>
+        <form method="post" class="absolute right-0 z-20 mt-2 w-[min(92vw,360px)] card p-4 space-y-3 shadow-xl">
+          <input type="hidden" name="_action" value="add" />
+          <div><label class="label" for="lname">Name</label><input id="lname" name="name" class="input" required /></div>
+          <div class="grid grid-cols-2 gap-2"><div><label class="label" for="lemail">Email</label><input id="lemail" name="email" type="email" class="input" /></div><div><label class="label" for="lphone">Phone</label><input id="lphone" name="phone" type="tel" class="input" /></div></div>
+          <div class="grid grid-cols-2 gap-2"><div><label class="label" for="ldate">Event date</label><input id="ldate" name="eventDate" type="date" class="input" min={today} /></div><div><label class="label" for="lzip">ZIP</label><input id="lzip" name="zip" class="input" inputmode="numeric" /></div></div>
+          <div><label class="label" for="lmsg">What do they need?</label><textarea id="lmsg" name="message" class="input" rows="2"></textarea></div>
+          <button class="btn-primary w-full">Save lead</button>
+        </form>
+      </details>
+    )}
+  </Fragment>
+  <Tabs active="leads" leads={open} />
+  <Help benefit="Every unfinished checkout and quote request is money on the table — work them left to right and turn them into bookings in one click.">
+    <ul>
+      <li><strong>Abandoned checkouts</strong> already got an automatic reminder; a quick personal call closes many of the rest.</li>
+      <li><strong>Convert to booking</strong> opens the phone-booking builder with their date, ZIP and cart filled in — and marks the lead won when you save.</li>
+      <li>Move leads to <strong>Lost</strong> when they book elsewhere so your win rate stays honest.</li>
+    </ul>
+  </Help>
+
+  <nav aria-label="Lead source" class="flex gap-1.5 overflow-x-auto pb-2">
+    {[['', 'All sources'], ...Object.entries(SOURCES)].map(([k, l]) => (
+      <a href={k ? `?source=${k}` : '?'} aria-current={source === k ? 'page' : undefined} class:list={['whitespace-nowrap rounded-full px-3.5 py-1.5 text-sm font-semibold border', source === k ? 'bg-ink text-white border-ink' : 'bg-white border-line text-ink-2 hover:text-ink']}>{l}</a>
+    ))}
+  </nav>
+
+  {leads.length === 0 ? (
+    <div class="mt-3"><Empty icon="users" title="No leads yet" text="Quote requests and abandoned checkouts from your website land here automatically — add phone enquiries with “Add lead”." cta={{ href: '/app/marketing', label: 'Drive more enquiries' }} learn={{ href: '/app/website', label: 'Check your quote form' }} /></div>
+  ) : (
+    <div class="flex gap-4 overflow-x-auto pb-4 mt-3 snap-x [contain:paint]" role="list" aria-label="Pipeline">
+      {STAGES.map((stage) => {
+        const col = shown.filter((l) => l.stage === stage);
+        return (
+          <section role="listitem" class="snap-start shrink-0 w-[85vw] sm:w-64 xl:w-auto xl:flex-1 xl:min-w-[13.5rem] rounded-2xl bg-white/60 border border-line p-3" aria-labelledby={`st-${stage}`}>
+            <header class="flex items-center gap-2 px-1 pb-2">
+              <span class:list={['chip', STAGE_META[stage].cls]} id={`st-${stage}`}>{STAGE_META[stage].label}</span>
+              <span class="text-xs text-ink-2 tabular-nums">{col.length}</span>
+            </header>
+            {col.length === 0 ? <p class="text-xs text-ink-2 px-1 py-6 text-center">Nothing here</p> : (
+              <ul class="space-y-2">
+                {col.map((l) => {
+                  const value = cartValue(l);
+                  return (
+                    <li class="card p-3">
+                      <div class="flex items-start gap-2">
+                        <p class="font-semibold text-sm min-w-0 flex-1 truncate">{l.name || l.email || 'Anonymous'}</p>
+                        {value > 0 && <span class="text-xs font-bold tabular-nums">{money(value)}</span>}
+                      </div>
+                      <p class="text-xs text-ink-2">{SOURCES[l.source]} · {ago(l.createdAt)}</p>
+                      <dl class="mt-2 text-xs text-ink-2 space-y-0.5">
+                        {l.eventDate && <div class:list={[l.eventDate < today && 'line-through']}><dt class="inline">Event: </dt><dd class="inline font-semibold text-ink">{shortDay(l.eventDate)}</dd>{l.zip && <span> · {l.zip}</span>}</div>}
+                        {!l.eventDate && l.zip && <div><dt class="inline">ZIP: </dt><dd class="inline">{l.zip}</dd></div>}
+                        {l.cart.length > 0 && <div><dt class="sr-only">Cart</dt><dd class="line-clamp-2">{l.cart.map((c) => itemMap.get(c.itemId)?.name ?? 'Item').join(', ')}</dd></div>}
+                        {l.message && !l.message.startsWith('Checkout started') && <div><dt class="sr-only">Message</dt><dd class="line-clamp-3 italic">“{l.message}”</dd></div>}
+                        {l.followUpsSent > 0 && <div>{l.followUpsSent} auto follow-up{l.followUpsSent === 1 ? '' : 's'} sent{l.lastFollowUpAt ? ` · last ${dateOnly(l.lastFollowUpAt, tz)}` : ''}</div>}
+                      </dl>
+                      <div class="flex gap-1.5 mt-3">
+                        {l.phone && <a href={`tel:${l.phone}`} class="btn-ghost !min-h-9 !px-0 w-9 shrink-0" aria-label={`Call ${l.name}`} title="Call"><Icon name="phone" size={15} /></a>}
+                        {l.email && <a href={`mailto:${l.email}`} class="btn-ghost !min-h-9 !px-0 w-9 shrink-0" aria-label={`Email ${l.name}`} title="Email"><Icon name="message" size={15} /></a>}
+                        {canManage && stage !== 'won' && stage !== 'lost' && <a href={convertUrl(l)} class="btn-primary !min-h-9 !px-2 text-xs flex-1 whitespace-nowrap">Convert<Icon name="arrow" size={13} /></a>}
+                      </div>
+                      {canManage && (
+                        <form method="post" class="flex gap-1.5 mt-1.5">
+                          <input type="hidden" name="_action" value="stage" /><input type="hidden" name="id" value={l.id} />
+                          <label class="sr-only" for={`s-${l.id}`}>Stage</label>
+                          <select id={`s-${l.id}`} name="stage" class="input !min-h-9 text-xs py-0 flex-1 min-w-0">{STAGES.map((s) => <option value={s} selected={s === l.stage}>{STAGE_META[s].label}</option>)}</select>
+                          <button class="btn-ghost !min-h-9 !px-2.5 text-xs">Move</button>
+                        </form>
+                      )}
+                    </li>
+                  );
+                })}
+              </ul>
+            )}
+          </section>
+        );
+      })}
+    </div>
+  )}
+  <SubmitGuard />
+</AppLayout>

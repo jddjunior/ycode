@@ -1,0 +1,22 @@
+---
+import SiteLayout from '../../../layouts/SiteLayout.astro';
+import Blocks from '../../../components/site/Blocks.astro';
+import { loadSiteCtx, loadPage } from '../../../lib/site/data';
+import { homeBlocks } from '../../../lib/provision';
+import { faqLd } from '../../../lib/seo';
+
+const ctx = await loadSiteCtx(Astro.locals, Astro.params.tenant);
+if (!ctx) return new Response('Not found', { status: 404 });
+const t = ctx.tenant;
+const page = await loadPage(t.id, '', ['page']);
+const blocks = page?.blocks?.length ? page.blocks : homeBlocks(t.name, t.city);
+const title = page?.seoTitle ?? page?.title ?? `Bounce House & Water Slide Rentals in ${t.city}, ${t.state}`;
+const faqs = blocks.filter((b) => b.type === 'faq').flatMap((b) => (Array.isArray(b.props.faqs) ? b.props.faqs as { q: string; a: string }[] : []));
+const ld = [
+  { '@context': 'https://schema.org', '@type': 'WebSite', '@id': `${ctx.origin}/#website`, url: ctx.origin + '/', name: t.name, publisher: { '@id': `${ctx.origin}/#business` } },
+  faqLd(faqs),
+];
+---
+<SiteLayout ctx={ctx} title={title} description={page?.seoDescription ?? undefined} ld={ld}>
+  <Blocks ctx={ctx} blocks={blocks} />
+</SiteLayout>

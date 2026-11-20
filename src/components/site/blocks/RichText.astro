@@ -1,0 +1,6 @@
+---
+import { miniMarkdown } from '../../../lib/util';
+interface Props { props: Record<string, unknown> }
+const md = String(Astro.props.props.markdown ?? '');
+---
+<section class="s-wrap s-section !py-12"><div class="s-prose max-w-3xl" set:html={miniMarkdown(md)} /></section>

@@ -1,0 +1,28 @@
+---
+import SiteLayout from '../../../../../layouts/SiteLayout.astro';
+import Breadcrumbs from '../../../../../components/site/Breadcrumbs.astro';
+import Packages from '../../../../../components/site/blocks/Packages.astro';
+import Steps from '../../../../../components/site/blocks/Steps.astro';
+import { loadSiteCtx } from '../../../../../lib/site/data';
+import { breadcrumbLd } from '../../../../../lib/seo';
+
+const ctx = await loadSiteCtx(Astro.locals, Astro.params.tenant);
+if (!ctx) return new Response('Not found', { status: 404 });
+const t = ctx.tenant;
+const crumbs = [{ name: 'Home', url: ctx.abs('/') }, { name: 'Rentals', url: ctx.abs('/rentals') }, { name: 'Packages', url: ctx.abs('/rentals/packages') }];
+---
+<SiteLayout ctx={ctx} title={`Party Rental Packages ${t.city}, ${t.state}`} description={`Bounce house party packages in ${t.city}: bundle a bouncer or water slide with treats and save. Live availability, delivery & setup included.`} ld={[breadcrumbLd(crumbs)]}>
+  <section class="s-hero-bg">
+    <div class="s-wrap pt-8 pb-12">
+      <Breadcrumbs crumbs={[{ name: 'Home', href: ctx.href('/') }, { name: 'Rentals', href: ctx.href('/rentals') }, { name: 'Packages' }]} />
+      <h1 class="s-h1 mt-5 !text-[clamp(2rem,5vw,3.4rem)] max-w-3xl">Party packages that save you money</h1>
+      <p class="s-lede mt-3 max-w-2xl">Everything for a great party in one booking — bounce, treats and setup — priced below renting each piece on its own.</p>
+    </div>
+  </section>
+  <Packages ctx={ctx} props={{ title: 'Pick your package' }} />
+  <Steps ctx={ctx} props={{ title: 'How booking works', steps: [
+    { title: 'Check your date', text: 'See live availability and your delivery fee from your ZIP.' },
+    { title: 'Reserve online', text: 'Small deposit, e-sign the agreement, instant confirmation.' },
+    { title: 'Party time', text: 'We deliver, set up, safety-check and pick up.' },
+  ] }} />
+</SiteLayout>

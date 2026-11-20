@@ -1,0 +1,40 @@
+---
+import type { SiteCtx } from '../../../lib/site/data';
+import { packageSavings, firstImage } from '../../../lib/site/data';
+import { money } from '../../../lib/pricing';
+interface Props { ctx: SiteCtx; props: Record<string, unknown>; headingLevel?: 'h1' | 'h2' }
+const { ctx, props: p } = Astro.props;
+const pkgs = ctx.items.filter((i) => i.kind === 'package').slice(0, 6).map((pkg) => ({ pkg, ...packageSavings(pkg, ctx.itemById) }));
+---
+{pkgs.length > 0 && (
+<section class="s-band">
+  <div class="s-wrap s-section">
+    <div class="flex flex-wrap items-end justify-between gap-4">
+      <h2 class="s-h2 max-w-2xl">{String(p.title ?? 'Party packages — save when you bundle')}</h2>
+      <a href={ctx.href('/rentals/packages')} class="font-extrabold underline underline-offset-4 min-h-11 inline-flex items-center">All packages →</a>
+    </div>
+    <ul class="mt-8 grid gap-5 md:grid-cols-3">
+      {pkgs.map(({ pkg, parts, savingsCents, listCents }, i) => (
+        <li class={`s-card !text-ink overflow-hidden flex flex-col relative ${i === 1 ? 'md:-translate-y-3' : ''}`}>
+          {i === 1 && <span class="absolute top-3 right-3 z-10 s-sticker text-xs">Most booked</span>}
+          <img src={firstImage(pkg)} alt="" width="800" height="600" loading="lazy" class="w-full aspect-[16/10] object-cover bg-muted" />
+          <div class="p-5 flex flex-col gap-3 flex-1">
+            <h3 class="font-display text-xl font-bold"><a href={ctx.href(ctx.itemPath(pkg))} class="hover:underline">{pkg.name}</a></h3>
+            <ul class="grid gap-1.5 text-sm">
+              {parts.map((x) => <li class="flex gap-2"><span class="text-primary font-black" aria-hidden="true">✓</span>{x.qty > 1 ? `${x.qty} × ` : ''}{x.item.name}</li>)}
+            </ul>
+            <div class="mt-auto pt-3 flex items-end justify-between gap-3 border-t border-line">
+              <p class="leading-tight">
+                {savingsCents > 0 && <span class="block text-sm s-sub line-through">{money(listCents)}</span>}
+                <span class="s-price text-2xl">{money(pkg.priceCents)}</span>
+              </p>
+              {savingsCents > 0 && <span class="s-chip s-chip-ok">Save {money(savingsCents)}</span>}
+            </div>
+            <a href={ctx.href(ctx.itemPath(pkg))} class="s-btn s-btn-cta w-full">Check this package</a>
+          </div>
+        </li>
+      ))}
+    </ul>
+  </div>
+</section>
+)}

@@ -1,0 +1,56 @@
+---
+import type { SiteCtx } from '../../../lib/site/data';
+import SearchBox from '../SearchBox.astro';
+import Stars from '../Stars.astro';
+import Icon from '../../Icon.astro';
+import { telHref, smsHref } from '../../../lib/site/data';
+interface Props { ctx: SiteCtx; props: Record<string, unknown>; city?: string }
+const { ctx, props: p } = Astro.props;
+const eyebrow = String(p.eyebrow ?? '');
+const headline = String(p.headline ?? ctx.tenant.name);
+const subhead = String(p.subhead ?? '');
+const image = typeof p.image === 'string' && p.image ? p.image : '/demo/hero.svg';
+const badges = Array.isArray(p.badges) ? (p.badges as unknown[]).map(String).slice(0, 4) : [];
+const showSearch = p.showDateSearch !== false;
+const { rating, tenant: t } = ctx;
+---
+<section class="s-hero-bg relative overflow-hidden">
+  <div class="s-wrap grid lg:grid-cols-[1.08fr_.92fr] gap-10 lg:gap-14 items-center pt-10 pb-14 md:pt-16 md:pb-20">
+    <div class="min-w-0">
+      {eyebrow && <p class="s-eyebrow">{eyebrow}</p>}
+      <h1 class="s-h1 mt-4">{headline}</h1>
+      {subhead && <p class="s-lede mt-5 max-w-xl">{subhead}</p>}
+      {rating.count > 0 && (
+        <p class="mt-5 flex flex-wrap items-center gap-x-3 gap-y-1 text-sm font-bold">
+          <Stars rating={rating.avg} size="text-lg" />
+          <span>{rating.avg.toFixed(1)} from {rating.count} verified review{rating.count === 1 ? '' : 's'}</span>
+        </p>
+      )}
+      {showSearch && (
+        <div id="check" class="s-card mt-7 p-4 sm:p-5 scroll-mt-28">
+          <p class="font-display font-bold text-lg mb-3">Is your date open? <span class="s-sub font-body font-semibold text-sm">Live availability + delivery fee</span></p>
+          <SearchBox ctx={ctx} id="hero" />
+        </div>
+      )}
+      <div class="mt-5 flex flex-wrap items-center gap-x-5 gap-y-2 text-sm font-bold">
+        {t.phone && <a href={smsHref(t.phone)} class="inline-flex items-center gap-2 min-h-11 hover:underline"><Icon name="message" size={18} /> Text us your date</a>}
+        {t.phone && <a href={telHref(t.phone)} class="inline-flex items-center gap-2 min-h-11 hover:underline"><Icon name="phone" size={18} /> {t.phone}</a>}
+      </div>
+    </div>
+    <div class="relative">
+      <div class="relative rounded-[calc(var(--r-card)*1.6)] overflow-hidden shadow-[0_40px_80px_-40px_rgba(0,0,0,.45)] aspect-[16/10] sm:aspect-[4/3] bg-muted sm:rotate-[1.2deg] [[data-theme=mono]_&]:rotate-0 [[data-theme=arcade]_&]:rotate-0 [[data-theme=arcade]_&]:border-[3px] [[data-theme=arcade]_&]:border-ink [[data-theme=arcade]_&]:shadow-[8px_8px_0_var(--c-ink)]">
+        <img src={image} alt={`${t.name} bounce house set up in a ${t.city} backyard`} width="800" height="600" fetchpriority="high" class="w-full h-full object-cover" />
+      </div>
+      {badges.length > 0 && (
+        <ul class="mt-4 sm:mt-0 sm:absolute sm:-bottom-5 sm:right-[-8px] sm:w-64 flex flex-wrap sm:flex-col gap-2" aria-label="What’s included">
+          {badges.map((b, i) => (
+            <li class={`s-card !rounded-2xl px-4 py-2.5 flex items-center gap-2.5 text-sm font-extrabold ${i > 1 ? 'hidden sm:flex' : ''} max-sm:!py-2 max-sm:text-xs ${i % 2 ? 'sm:-translate-x-6' : ''}`}>
+              <span class="grid place-items-center size-7 rounded-full bg-primary text-primary-ink shrink-0"><Icon name="check" size={15} /></span>{b}
+            </li>
+          ))}
+        </ul>
+      )}
+    </div>
+  </div>
+  <div class="s-divider" aria-hidden="true"></div>
+</section>

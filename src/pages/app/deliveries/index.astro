@@ -1,0 +1,193 @@
+---
+/** Deliveries: the day's drop-offs and pickups, optimised route, crew assignment, load list, weather. */
+import { and, eq, inArray, isNull } from 'drizzle-orm';
+import AppLayout from '../../../layouts/AppLayout.astro';
+import Icon from '../../../components/Icon.astro';
+import WeatherBadge from '../../../components/ops/WeatherBadge.astro';
+import Help from '../../../components/ops/Help.astro';
+import Empty from '../../../components/ops/Empty.astro';
+import SubmitGuard from '../../../components/ops/SubmitGuard.astro';
+import { getDb, schema } from '../../../db/client';
+import { formData, str, flash } from '../../../lib/forms';
+import { opsCtx, pickDay, dayTitle, shortDay, addDays, time, isUuid, fullAddress, mapsLink } from '../../../lib/ops/ctx';
+import { stopsForDay, routeStops, weatherFor, loadList, depotOf, CHECKLIST } from '../../../lib/ops/stops';
+
+const { t, tz, today, settings, canManage } = opsCtx(Astro);
+const db = await getDb();
+const day = pickDay(Astro.url.searchParams.get('day'), today);
+const self = `/app/deliveries?day=${day}`;
+
+const team = await db.select({ id: schema.users.id, name: schema.users.name, email: schema.users.email, role: schema.memberships.role })
+  .from(schema.memberships).innerJoin(schema.users, eq(schema.users.id, schema.memberships.userId)).where(eq(schema.memberships.tenantId, t.id));
+const teamIds = new Set(team.map((m) => m.id));
+
+const f = await formData(Astro);
+if (f && canManage) {
+  const action = str(f, '_action', 20);
+  const crew = str(f, 'crew', 40);
+  if (crew && !teamIds.has(crew)) return new Response('Bad request', { status: 400 });
+  if (action === 'crew') {
+    const id = str(f, 'bookingId', 40);
+    if (isUuid(id)) await db.update(schema.bookings).set({ crewUserId: crew || null, updatedAt: new Date() }).where(and(eq(schema.bookings.id, id), eq(schema.bookings.tenantId, t.id)));
+    flash(Astro.cookies, crew ? `Assigned to ${team.find((m) => m.id === crew)?.name || 'crew'}.` : 'Unassigned.');
+  } else if (action === 'crewAll' && crew) {
+    const ids = (await stopsForDay(t, day)).map((s) => s.booking.id);
+    if (ids.length) await db.update(schema.bookings).set({ crewUserId: crew, updatedAt: new Date() }).where(and(eq(schema.bookings.tenantId, t.id), inArray(schema.bookings.id, ids), isNull(schema.bookings.crewUserId)));
+    flash(Astro.cookies, 'All unassigned stops assigned.');
+  }
+  return Astro.redirect(self, 303);
+}
+
+const stops = await stopsForDay(t, day);
+const route = routeStops(t, stops);
+const wx = (await weatherFor(t, [day]))[day];
+const trucks = loadList(stops);
+const nameOf = (id: string | null) => (id ? (team.find((m) => m.id === id)?.name || team.find((m) => m.id === id)?.email || 'Crew') : 'Unassigned');
+const drops = stops.filter((s) => s.kind === 'dropoff').length, picks = stops.length - drops;
+const unrouted = route.ordered.filter((s) => s.booking.lat == null || s.booking.lng == null).length;
+const depot = depotOf(t);
+const hasCrew = team.some((m) => m.role === 'crew');
+---
+<AppLayout title="Deliveries" section="deliveries" subtitle={[today, addDays(today, 1), addDays(today, -1)].includes(day) ? `${dayTitle(day, today)} · ${shortDay(day)}` : dayTitle(day, today)} wide>
+  <Fragment slot="actions">
+    <a href={`?day=${addDays(day, -1)}`} class="btn-ghost px-3" aria-label="Previous day"><Icon name="arrow" size={16} class="rotate-180" /></a>
+    <form method="get" class="flex"><label class="sr-only" for="day">Day</label><input id="day" name="day" type="date" class="input w-40" value={day} onchange="this.form.submit()" /></form>
+    <a href={`?day=${addDays(day, 1)}`} class="btn-ghost px-3" aria-label="Next day"><Icon name="arrow" size={16} /></a>
+    {day !== today && <a href="?" class="btn-ghost">Today</a>}
+  </Fragment>
+
+  <div class="no-print"><Help benefit="Plan the whole day in one screen: the fastest route that still makes every setup time, who drives what, and exactly what goes on each truck.">
+    <ul>
+      <li>Drop-offs are due at the event start <strong>minus the longest setup time</strong> on the booking; pickups start when the party ends.</li>
+      <li>Routes are planned as a morning drop-off run and an afternoon pickup run — deadlines first, then the shortest path — from your depot in Settings.</li>
+      <li>Assign a crew member and their phone shows the stops in this order with a checklist. Print the load list for the truck.</li>
+    </ul>
+  </Help></div>
+  <section class="grid grid-cols-2 md:grid-cols-4 gap-3 no-print" aria-label="Day summary">
+    <div class="kpi"><p class="kpi-label">Drop-offs</p><p class="kpi-value">{drops}</p></div>
+    <div class="kpi"><p class="kpi-label">Pickups</p><p class="kpi-value">{picks}</p></div>
+    <div class="kpi"><p class="kpi-label">Route miles</p><p class="kpi-value">{route.routed ? Math.round(route.miles) : '—'}</p><p class="text-xs text-ink-2 mt-1">{route.routed ? (route.lateMin ? `~${route.lateMin} min late risk` : 'All stops on time') : 'Needs depot + stop coordinates'}</p></div>
+    <div class="kpi"><p class="kpi-label">Weather</p><div class="mt-2"><WeatherBadge risk={wx} /></div><p class="text-xs text-ink-2 mt-1.5">Limit {settings.windLimitMph ?? 15} mph</p></div>
+  </section>
+
+  {wx?.level === 'stop' && (
+    <div role="alert" class="mt-4 rounded-2xl bg-red-50 border border-red-200 p-4 text-sm text-red-900 no-print">
+      <p class="font-bold flex items-center gap-2"><Icon name="x" size={16} />Do not set up inflatables outdoors — {wx.reasons.join('; ')}.</p>
+      <p class="mt-1">Call each customer below to reschedule or move indoors.</p>
+    </div>
+  )}
+
+  {stops.length === 0 ? (
+    <div class="mt-6"><Empty icon="truck" title={`No deliveries or pickups ${day === today ? 'today' : 'this day'}`} text="A free day is a great day to clean units, log repairs, or text past customers about open weekend dates." cta={{ href: `/app/bookings/new?date=${day}`, label: 'Book this day' }} learn={{ href: '/app/bookings?view=calendar', label: 'Find a busy day' }} /></div>
+  ) : (
+    <div class="grid gap-6 xl:grid-cols-[minmax(0,1fr)_380px] mt-6">
+      <section class="card overflow-hidden no-print" aria-labelledby="route-h">
+        <header class="flex flex-wrap items-center gap-2 px-5 py-4 border-b border-line">
+          <div>
+            <h2 id="route-h" class="font-bold text-lg">Optimised route</h2>
+            <p class="text-xs text-ink-2">From {depot ? (t.addressLine || `${t.city} depot`) : 'your depot (set lat/lng in Settings)'} · deadlines first, then shortest path</p>
+          </div>
+        </header>
+        {unrouted > 0 && <p class="px-5 py-2 text-xs bg-amber-50 text-amber-900 border-b border-amber-200">{unrouted} stop{unrouted === 1 ? ' has' : 's have'} no map coordinates and {unrouted === 1 ? 'is' : 'are'} listed last by time — use the Directions link.</p>}
+        {route.runs.map((run) => (
+        <div>
+        <div class="flex flex-wrap items-center gap-2 px-5 py-2.5 bg-canvas/70 border-b border-line">
+          <h3 class="text-sm font-bold">{run.label}</h3>
+          <span class="text-xs text-ink-2">{run.ordered.length} stop{run.ordered.length === 1 ? '' : 's'}{run.mapsUrl ? ` · ${Math.round(run.miles)} mi round trip` : ''}</span>
+          {run.mapsUrl && <a href={run.mapsUrl} target="_blank" rel="noopener" class="btn-primary !min-h-9 text-xs ml-auto"><Icon name="map" size={14} />Open run in Google Maps</a>}
+        </div>
+        <ol class="divide-y divide-line border-b border-line">
+          {run.ordered.map((s) => {
+            const done = Object.values(s.booking.checklist ?? {}).filter(Boolean).length;
+            return (
+              <li class="px-5 py-4 flex gap-4">
+                <span class:list={['grid place-items-center size-9 rounded-full text-sm font-bold shrink-0', s.done ? 'bg-mint text-white' : s.kind === 'dropoff' ? 'bg-brand text-white' : 'bg-pop text-[#1B1F4A]']} aria-label={`Stop ${s.seq}`}>{s.done ? <Icon name="check" size={16} /> : s.seq}</span>
+                <div class="min-w-0 flex-1">
+                  <div class="flex flex-wrap items-center gap-2">
+                    <span class:list={['chip', s.kind === 'dropoff' ? 'bg-brand-soft text-brand' : 'bg-pop/15 text-[#B23A0B]']}>{s.kind === 'dropoff' ? 'Drop-off' : 'Pickup'}</span>
+                    <span class="text-sm font-semibold">{s.kind === 'dropoff' ? 'Ready by' : 'After'} {time(s.kind === 'dropoff' ? s.booking.startsAt : s.booking.endsAt, tz)}</span>
+                    {s.eta && <span class="text-xs text-ink-2">ETA ~{time(new Date(s.eta), tz)}</span>}
+                    {s.kind === 'dropoff' && <span class="text-xs text-ink-2">· {done}/{CHECKLIST.length} checklist</span>}
+                  </div>
+                  <p class="font-semibold mt-1"><a href={`/app/bookings/${s.booking.id}`} class="hover:text-brand">{s.customer?.name || 'Customer'} · #{s.booking.number}</a></p>
+                  <p class="text-sm text-ink-2">{fullAddress(s.booking)}</p>
+                  <p class="text-sm mt-1">{s.lines.map((l) => `${l.qty > 1 ? l.qty + '× ' : ''}${l.name}`).join(' · ')}</p>
+                  {s.booking.notes && <p class="text-xs mt-1 rounded-lg bg-sun/20 px-2 py-1 inline-block">{s.booking.notes}</p>}
+                  <div class="flex flex-wrap items-center gap-2 mt-3">
+                    <a href={mapsLink(s.booking)} target="_blank" rel="noopener" class="btn-ghost !min-h-9 text-xs"><Icon name="map" size={14} />Directions</a>
+                    {s.customer?.phone && <a href={`tel:${s.customer.phone}`} class="btn-ghost !min-h-9 text-xs"><Icon name="phone" size={14} />Call</a>}
+                    {canManage && (
+                      <form method="post" class="flex gap-1.5 items-center">
+                        <input type="hidden" name="_action" value="crew" /><input type="hidden" name="bookingId" value={s.booking.id} />
+                        <label class="sr-only" for={`c-${s.key}`}>Crew for stop {s.seq}</label>
+                        <select id={`c-${s.key}`} name="crew" class="input !min-h-9 text-xs w-40">
+                          <option value="">Unassigned</option>
+                          {team.map((m) => <option value={m.id} selected={m.id === s.booking.crewUserId}>{m.name || m.email}{m.role === 'crew' ? '' : ` (${m.role})`}</option>)}
+                        </select>
+                        <button class="btn-ghost !min-h-9 text-xs">Assign</button>
+                      </form>
+                    )}
+                  </div>
+                </div>
+              </li>
+            );
+          })}
+        </ol>
+        </div>
+        ))}
+      </section>
+
+      <aside class="space-y-6">
+        {canManage && (
+          <section class="card p-5 no-print" aria-labelledby="crewall-h">
+            <h2 id="crewall-h" class="font-bold">Crew</h2>
+            {hasCrew ? (
+              <form method="post" class="flex gap-2 mt-3 items-end">
+                <input type="hidden" name="_action" value="crewAll" />
+                <div class="flex-1"><label class="label" for="crewall">Assign all unassigned to</label>
+                  <select id="crewall" name="crew" class="input">{team.map((m) => <option value={m.id}>{m.name || m.email}</option>)}</select></div>
+                <button class="btn-ghost">Assign</button>
+              </form>
+            ) : <p class="text-sm text-ink-2 mt-2">Add crew members so they get today’s route on their phone. <a href="/app/settings/team" class="text-brand font-semibold">Invite crew</a></p>}
+            <a href={`/app/crew?day=${day}`} class="btn-ghost w-full mt-3"><Icon name="truck" size={16} />Open crew view</a>
+          </section>
+        )}
+
+        <section class="card p-5 print-area" aria-labelledby="load-h">
+          <div class="flex items-center gap-2">
+            <h2 id="load-h" class="font-bold text-lg">Load list</h2>
+            <button type="button" class="btn-ghost !min-h-9 text-xs ml-auto no-print" onclick="window.print()"><Icon name="box" size={14} />Print</button>
+          </div>
+          <p class="text-xs text-ink-2">{t.name} · {shortDay(day)} · drop-offs only</p>
+          {[...trucks.entries()].length === 0 ? <p class="text-sm text-ink-2 mt-3">Nothing to load — pickups only.</p> : [...trucks.entries()].map(([crew, items]) => (
+            <div class="mt-4">
+              <h3 class="text-sm font-bold flex items-center gap-2"><Icon name="truck" size={16} />{nameOf(crew || null)}</h3>
+              <ul class="mt-2 divide-y divide-line border border-line rounded-xl">
+                {[...items.values()].sort((a, b) => a.name.localeCompare(b.name)).map((x) => (
+                  <li class="flex items-center gap-3 px-3 py-2 text-sm">
+                    <span class="size-4 rounded border-2 border-ink-2/50 shrink-0" aria-hidden="true"></span>
+                    <span class="flex-1">{x.name}{x.wet && <span class="chip bg-sky-100 text-sky-800 ml-1">Wet</span>}</span>
+                    <span class="font-bold tabular-nums">×{x.qty}</span>
+                  </li>
+                ))}
+              </ul>
+            </div>
+          ))}
+          <p class="text-xs text-ink-2 mt-4">Don’t forget: stakes & sandbags, extension cords, tarps, blower straps, hand truck, sanitizer.</p>
+          <div class="hidden print:block mt-6 text-sm">
+            <h3 class="font-bold">Stops</h3>
+            <ol class="list-decimal pl-5 mt-1">{route.ordered.map((s) => <li>{time(s.dueAt, tz)} — {s.kind === 'dropoff' ? 'DROP' : 'PICKUP'} — {s.customer?.name} — {fullAddress(s.booking)}</li>)}</ol>
+          </div>
+        </section>
+      </aside>
+    </div>
+  )}
+  <SubmitGuard />
+</AppLayout>
+<style is:global>
+  @media print {
+    #sidenav, body > div header.sticky, .no-print, a[href="#main"] { display: none !important; }
+    body { background: #fff; }
+    .print-area { border: 0; box-shadow: none; }
+  }
+</style>

@@ -1,0 +1,27 @@
+---
+import type { SiteCtx } from '../../../lib/site/data';
+import ReviewCard from '../ReviewCard.astro';
+import Stars from '../Stars.astro';
+interface Props { ctx: SiteCtx; props: Record<string, unknown>; city?: string }
+const { ctx, props: p, city } = Astro.props;
+const limit = Math.min(12, Math.max(1, Number(p.limit ?? 6)));
+const reviews = ctx.reviews.slice(0, limit);
+const g = ctx.tenant.settings?.googleReviewUrl;
+---
+{reviews.length > 0 && (
+<section class="s-wrap s-section">
+  <div class="flex flex-wrap items-end justify-between gap-6">
+    <div>
+      <h2 class="s-h2">{String(p.title ?? 'What families say')}</h2>
+      <p class="mt-3 flex flex-wrap items-center gap-3 font-bold">
+        <span class="font-display text-4xl">{ctx.rating.avg.toFixed(1)}</span>
+        <span class="leading-tight"><Stars rating={ctx.rating.avg} size="text-xl" /><span class="block text-sm s-sub">{ctx.rating.count} verified review{ctx.rating.count === 1 ? '' : 's'}{city ? ` · families across ${city} & nearby` : ''}</span></span>
+      </p>
+    </div>
+    {g && /^https:\/\//.test(g) && <a href={g} rel="noopener" class="s-btn s-btn-ghost">Booked with us? Leave a review</a>}
+  </div>
+  <div class="mt-8 grid gap-4 sm:gap-5 md:grid-cols-2 lg:grid-cols-3">
+    {reviews.map((r) => <ReviewCard review={r} />)}
+  </div>
+</section>
+)}

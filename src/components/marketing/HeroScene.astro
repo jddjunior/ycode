@@ -1,0 +1,93 @@
+---
+/** Original illustrated backyard-party scene for the BounceOS homepage hero. */
+interface Props { class?: string }
+const { class: cls = '' } = Astro.props;
+---
+<svg class:list={['hero-scene', cls]} viewBox="0 0 760 560" role="img" aria-labelledby="hs-title" xmlns="http://www.w3.org/2000/svg">
+  <title id="hs-title">A colorful bounce castle and water slide set up in a sunny backyard</title>
+  <defs>
+    <linearGradient id="hs-sky" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#8FD3FF" /><stop offset="1" stop-color="#E8F7FF" /></linearGradient>
+    <linearGradient id="hs-grass" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#5BC26A" /><stop offset="1" stop-color="#3FA552" /></linearGradient>
+    <linearGradient id="hs-wall" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#3B82F6" /><stop offset="1" stop-color="#2563EB" /></linearGradient>
+    <linearGradient id="hs-slide" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#22D3EE" /><stop offset="1" stop-color="#0EA5E9" /></linearGradient>
+    <clipPath id="hs-clip"><rect width="760" height="560" rx="36" /></clipPath>
+  </defs>
+  <g clip-path="url(#hs-clip)">
+    <rect width="760" height="560" fill="url(#hs-sky)" />
+    <g class="hs-sun"><circle cx="640" cy="92" r="52" fill="#FFD43B" /><circle cx="640" cy="92" r="70" fill="#FFD43B" opacity=".25" /></g>
+    <g class="hs-cloud" fill="#fff"><ellipse cx="120" cy="90" rx="58" ry="22" /><ellipse cx="158" cy="76" rx="38" ry="26" /><ellipse cx="94" cy="80" rx="30" ry="20" /></g>
+    <g class="hs-cloud hs-cloud-2" fill="#fff" opacity=".9"><ellipse cx="430" cy="58" rx="46" ry="17" /><ellipse cx="458" cy="47" rx="28" ry="20" /></g>
+    <!-- bunting -->
+    <path d="M-10 150 Q190 205 380 160 T770 150" fill="none" stroke="#1B1F4A" stroke-width="2" opacity=".5" />
+    <g>
+      {[[30, 160, '#FF5A1F'], [90, 176, '#FFD43B'], [150, 188, '#2563EB'], [210, 192, '#22C55E'], [270, 186, '#EC4899'], [330, 170, '#FF5A1F'], [450, 160, '#FFD43B'], [510, 170, '#2563EB'], [570, 172, '#22C55E'], [630, 166, '#EC4899'], [690, 157, '#FF5A1F']].map(([x, y, c]) => (
+        <path d={`M${x} ${y} l18 2 l-11 22 z`} fill={c as string} />
+      ))}
+    </g>
+    <!-- lawn -->
+    <path d="M0 410 Q190 360 380 392 T760 380 V560 H0 Z" fill="url(#hs-grass)" />
+    <path d="M0 450 Q240 420 470 446 T760 440 V560 H0 Z" fill="#4BB35C" />
+    <!-- water slide (back right) -->
+    <g class="hs-slide">
+      <path d="M520 410 L578 210 h70 L742 430 Z" fill="#16A34A" />
+      <path d="M560 420 L600 228 h28 L690 428 Z" fill="url(#hs-slide)" />
+      <path d="M590 425 L612 236" stroke="#fff" stroke-width="5" opacity=".7" stroke-linecap="round" />
+      <path d="M640 428 L620 236" stroke="#fff" stroke-width="5" opacity=".5" stroke-linecap="round" />
+      <rect x="566" y="190" width="94" height="34" rx="16" fill="#F97316" />
+      <rect x="520" y="420" width="226" height="40" rx="20" fill="#38BDF8" />
+      <path d="M538 440 q16 -12 32 0 t32 0 t32 0 t32 0 t32 0 t32 0" stroke="#fff" stroke-width="4" fill="none" opacity=".85" stroke-linecap="round" />
+    </g>
+    <!-- bounce castle (animated) -->
+    <g class="hs-castle">
+      <ellipse cx="300" cy="474" rx="210" ry="18" fill="#1B1F4A" opacity=".18" class="hs-shadow" />
+      <g class="hs-body">
+        <rect x="130" y="250" width="340" height="200" rx="30" fill="url(#hs-wall)" />
+        <!-- turrets -->
+        <rect x="104" y="170" width="70" height="285" rx="34" fill="#FF5A1F" />
+        <rect x="426" y="170" width="70" height="285" rx="34" fill="#FF5A1F" />
+        <circle cx="139" cy="166" r="38" fill="#FFD43B" />
+        <circle cx="461" cy="166" r="38" fill="#FFD43B" />
+        <path d="M139 128 v-34 l26 10 l-26 10" fill="#EC4899" stroke="#1B1F4A" stroke-width="2" />
+        <path d="M461 128 v-34 l26 10 l-26 10" fill="#22C55E" stroke="#1B1F4A" stroke-width="2" />
+        <!-- roof arch -->
+        <path d="M190 252 Q300 140 410 252 Z" fill="#FFD43B" />
+        <path d="M222 252 Q300 178 378 252 Z" fill="#FF5A1F" />
+        <!-- mesh window -->
+        <rect x="190" y="282" width="220" height="118" rx="20" fill="#E0F2FE" />
+        {[0, 1, 2, 3, 4, 5, 6, 7].map((i) => <rect x={204 + i * 26} y="290" width="8" height="102" rx="4" fill="#93C5FD" />)}
+        <!-- entry ramp -->
+        <path d="M222 440 h156 l40 40 H182 Z" fill="#FFD43B" />
+        <path d="M236 452 h128" stroke="#F59E0B" stroke-width="4" stroke-linecap="round" />
+        <!-- base tube -->
+        <rect x="112" y="424" width="376" height="38" rx="19" fill="#FF5A1F" />
+        <!-- stars -->
+        <path d="M300 214 l6 12 13 2 -9 9 2 13 -12 -6 -12 6 2 -13 -9 -9 13 -2z" fill="#fff" />
+      </g>
+      <!-- stake & blower -->
+      <rect x="500" y="452" width="40" height="26" rx="6" fill="#334155" />
+      <circle cx="520" cy="465" r="8" fill="#94A3B8" />
+      <path d="M500 465 C480 465 482 448 470 446" stroke="#334155" stroke-width="6" fill="none" stroke-linecap="round" />
+    </g>
+    <!-- balloons -->
+    <g class="hs-balloons">
+      <path d="M58 300 q6 60 -4 120" stroke="#1B1F4A" stroke-width="1.5" fill="none" opacity=".5" />
+      <ellipse cx="58" cy="290" rx="22" ry="27" fill="#EC4899" />
+      <path d="M82 320 q4 50 -10 100" stroke="#1B1F4A" stroke-width="1.5" fill="none" opacity=".5" />
+      <ellipse cx="84" cy="310" rx="20" ry="25" fill="#FFD43B" />
+    </g>
+  </g>
+</svg>
+
+<style>
+  .hero-scene { display: block; width: 100%; height: auto; }
+  .hs-body { transform-origin: 300px 470px; animation: hs-bounce 2.4s cubic-bezier(.3,.2,.3,1) infinite; }
+  .hs-shadow { transform-origin: 300px 474px; animation: hs-shadow 2.4s cubic-bezier(.3,.2,.3,1) infinite; }
+  .hs-cloud { animation: hs-drift 18s ease-in-out infinite alternate; }
+  .hs-cloud-2 { animation-duration: 24s; }
+  .hs-balloons { transform-origin: 70px 420px; animation: hs-sway 5s ease-in-out infinite alternate; }
+  @keyframes hs-bounce { 0%, 100% { transform: translateY(0) scale(1, 1); } 40% { transform: translateY(-14px) scale(.985, 1.015); } 55% { transform: translateY(-14px); } 85% { transform: translateY(0) scale(1.02, .975); } }
+  @keyframes hs-shadow { 0%, 100% { transform: scale(1); opacity: .18; } 45% { transform: scale(.9); opacity: .1; } }
+  @keyframes hs-drift { from { transform: translateX(-10px); } to { transform: translateX(26px); } }
+  @keyframes hs-sway { from { transform: rotate(-3deg); } to { transform: rotate(3deg); } }
+  @media (prefers-reduced-motion: reduce) { .hs-body, .hs-shadow, .hs-cloud, .hs-balloons { animation: none; } }
+</style>

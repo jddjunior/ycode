@@ -1,0 +1,99 @@
+---
+import { desc, eq, sql } from 'drizzle-orm';
+import Shell from './_Shell.astro';
+import Icon from '../../components/Icon.astro';
+import { getDb, schema } from '../../db/client';
+import { ledgerSummary } from '../../lib/revenue';
+import { money } from '../../lib/pricing';
+import { PLANS } from '../../lib/plans';
+import { platformKpis, topCities, marketplaceStats, signupsByWeek } from '../../lib/growth/hq';
+
+const db = await getDb();
+const k = await platformKpis(30);
+const ledger = await ledgerSummary(30);
+const cities = await topCities(8);
+const mk = await marketplaceStats(90);
+const weeks = await signupsByWeek(8);
+const planMix = await db.select({ plan: schema.tenants.plan, n: sql<number>`count(*)::int` }).from(schema.tenants).groupBy(schema.tenants.plan);
+const recent = await db.select({ e: schema.revenueEvents, name: schema.tenants.name }).from(schema.revenueEvents).leftJoin(schema.tenants, eq(schema.tenants.id, schema.revenueEvents.tenantId)).orderBy(desc(schema.revenueEvents.createdAt)).limit(8);
+const KIND: Record<string, string> = { platform_fee: 'Platform fees', subscription: 'Subscriptions', referral_commission: 'Referral commissions (payout)', marketplace_lead_fee: 'Marketplace fees', partner_referral: 'Partner shares (payout)', ads_management_fee: 'Managed ads fees' };
+const maxCity = Math.max(1, ...cities.map((c) => Number(c.gmv)));
+const maxWeek = Math.max(1, ...weeks.map((w) => w.n));
+const ledgerTotal = ledger.filter((l) => !['referral_commission', 'partner_referral'].includes(l.kind)).reduce((s, l) => s + l.total, 0);
+---
+<Shell title="Platform overview" active="overview" subtitle="Branch Avenue’s revenue share across subscriptions, platform fees, marketplace, ads and referrals.">
+  <div class="grid gap-3 grid-cols-2 lg:grid-cols-4 mb-6">
+    <div class="kpi bg-ink text-white border-ink"><p class="kpi-label text-white/60">MRR (active plans)</p><p class="kpi-value text-sun">{money(k.mrr)}</p><p class="text-xs text-white/60 mt-1">+{money(k.trialMrr)} in trials</p></div>
+    <div class="kpi"><p class="kpi-label">GMV (all time)</p><p class="kpi-value">{money(k.gmv)}</p><p class="hint">{money(k.gmvRecent)} last 30 days · {k.bookings} bookings</p></div>
+    <div class="kpi"><p class="kpi-label">Platform fees</p><p class="kpi-value">{money(k.platformFees)}</p><p class="hint">{money(k.platformFeesRecent)} last 30 days</p></div>
+    <div class="kpi"><p class="kpi-label">Take rate</p><p class="kpi-value">{(k.takeRate * 100).toFixed(2)}%</p><p class="hint">(platform + marketplace fees) ÷ GMV</p></div>
+  </div>
+  <div class="grid gap-3 grid-cols-2 lg:grid-cols-4 mb-6">
+    <div class="kpi"><p class="kpi-label">Tenants</p><p class="kpi-value">{k.tenants}</p><p class="hint">{k.active} active · {k.trial} trial · {k.pastDue} past due</p></div>
+    <div class="kpi"><p class="kpi-label">Marketplace fees</p><p class="kpi-value">{money(k.marketplaceFees)}</p></div>
+    <div class="kpi"><p class="kpi-label">Managed ads fees</p><p class="kpi-value">{money(k.adsFees)}</p></div>
+    <div class="kpi"><p class="kpi-label">Owed to operators</p><p class="kpi-value text-warn">{money(k.payouts)}</p><p class="hint"><a class="text-brand font-semibold" href="/hq/ledger?kind=payouts">Review payouts →</a></p></div>
+  </div>
+
+  <div class="grid gap-6 lg:grid-cols-3 mb-6">
+    <section class="card p-4 lg:col-span-2" aria-labelledby="led-h">
+      <div class="flex items-center gap-2"><h2 id="led-h" class="font-bold">Revenue share — last 30 days</h2><a href="/hq/ledger" class="ml-auto text-xs text-brand font-semibold">Full ledger →</a></div>
+      <ul class="mt-4 space-y-3">
+        {Object.keys(KIND).map((kind) => {
+          const row = ledger.find((l) => l.kind === kind);
+          const total = row?.total ?? 0;
+          const payout = kind === 'referral_commission' || kind === 'partner_referral';
+          return (
+            <li>
+              <div class="flex justify-between text-sm"><span class="font-medium">{KIND[kind]}</span><span class="tabular-nums font-semibold">{money(total)} <span class="text-xs text-ink-2 font-normal">· {row?.n ?? 0}</span></span></div>
+              <div class="mt-1 h-2 rounded-full bg-canvas overflow-hidden"><div class:list={['h-full rounded-full', payout ? 'bg-warn/70' : 'bg-brand']} style={`width:${ledgerTotal ? Math.min(100, (total / ledgerTotal) * 100) : 0}%`}></div></div>
+            </li>
+          );
+        })}
+      </ul>
+    </section>
+    <section class="card p-4" aria-labelledby="mk-h">
+      <div class="flex items-center gap-2"><h2 id="mk-h" class="font-bold">Marketplace</h2><a href="/hq/marketplace" class="ml-auto text-xs text-brand font-semibold">Details →</a></div>
+      <dl class="mt-3 grid grid-cols-2 gap-3">
+        <div class="rounded-xl bg-canvas p-3"><dt class="text-xs text-ink-2">Quote requests</dt><dd class="text-xl font-bold tabular-nums">{mk.total}</dd></div>
+        <div class="rounded-xl bg-canvas p-3"><dt class="text-xs text-ink-2">Routed</dt><dd class="text-xl font-bold tabular-nums">{mk.routed}</dd></div>
+        <div class="rounded-xl bg-canvas p-3"><dt class="text-xs text-ink-2">Won</dt><dd class="text-xl font-bold tabular-nums text-mint">{mk.won}</dd></div>
+        <div class="rounded-xl bg-canvas p-3"><dt class="text-xs text-ink-2">Win rate</dt><dd class="text-xl font-bold tabular-nums">{mk.routed ? Math.round((mk.won / mk.routed) * 100) : 0}%</dd></div>
+      </dl>
+      {mk.unrouted > 0 && <p class="mt-3 text-xs text-warn flex gap-1.5"><Icon name="map" size={14} class="shrink-0" />{mk.unrouted} request{mk.unrouted === 1 ? '' : 's'} had no operator — recruit there.</p>}
+      <h3 class="font-bold text-sm mt-5">Plan mix</h3>
+      <ul class="mt-2 space-y-1 text-sm">{planMix.map((p) => <li class="flex justify-between"><span>{PLANS[p.plan].name}</span><span class="tabular-nums font-semibold">{p.n}</span></li>)}</ul>
+    </section>
+  </div>
+
+  <div class="grid gap-6 lg:grid-cols-3 items-start">
+    <section class="card p-4" aria-labelledby="cities-h">
+      <h2 id="cities-h" class="font-bold">Top cities by GMV</h2>
+      {cities.length === 0 ? <p class="text-sm text-ink-2 mt-3">No bookings yet.</p> : (
+        <ol class="mt-3 space-y-2.5">
+          {cities.map((c, i) => (
+            <li>
+              <div class="flex justify-between text-sm"><span class="font-medium truncate">{i + 1}. {c.city}{c.state ? `, ${c.state}` : ''}</span><span class="tabular-nums font-semibold">{money(Number(c.gmv))}</span></div>
+              <div class="mt-1 h-1.5 rounded-full bg-canvas"><div class="h-full rounded-full bg-pop" style={`width:${(Number(c.gmv) / maxCity) * 100}%`}></div></div>
+              <p class="text-xs text-ink-2">{c.n} booking{c.n === 1 ? '' : 's'} · {c.tenants} operator{c.tenants === 1 ? '' : 's'}</p>
+            </li>
+          ))}
+        </ol>
+      )}
+    </section>
+    <section class="card p-4" aria-labelledby="su-h">
+      <h2 id="su-h" class="font-bold">New tenants by week</h2><p class="text-xs text-ink-2">Last 8 weeks · {weeks.reduce((a, w) => a + w.n, 0)} signups</p>
+      <div class="mt-4 flex items-end gap-2 h-36" role="img" aria-label={`Signups per week: ${weeks.map((w) => `${w.wk} ${w.n}`).join(', ')}`}>
+        {weeks.map((w) => (
+          <div class="flex-1 flex flex-col items-center gap-1 h-full justify-end"><span class="text-xs font-semibold tabular-nums">{w.n}</span><div class:list={['w-full max-w-10 rounded-t-lg', w.n ? 'bg-brand' : 'bg-line']} style={`height:${w.n ? Math.max(6, (w.n / maxWeek) * 100) : 3}%`}></div><span class="text-[10px] text-ink-2 whitespace-nowrap">{w.wk}</span></div>
+        ))}
+      </div>
+    </section>
+    <section class="card overflow-hidden" aria-labelledby="re-h">
+      <h2 id="re-h" class="font-bold px-4 py-3 border-b border-line">Latest ledger events</h2>
+      <ul class="divide-y divide-line text-sm">
+        {recent.map(({ e, name }) => <li class="px-4 py-2 flex gap-2"><span class="min-w-0 flex-1"><span class="block truncate font-medium">{KIND[e.kind]?.replace(' (payout)', '') ?? e.kind}</span><span class="block text-xs text-ink-2 truncate">{name ?? '—'} · {e.status}</span></span><span class="tabular-nums font-semibold">{money(e.amountCents)}</span></li>)}
+      </ul>
+    </section>
+  </div>
+</Shell>

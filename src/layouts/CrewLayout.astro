@@ -1,0 +1,54 @@
+---
+/**
+ * Lightweight, mobile-first shell for the crew app (/app/crew/**).
+ * Big tap targets, no sidebar; works for crew-role users (who can't reach the rest of /app).
+ */
+import '../styles/app.css';
+import Icon from '../components/Icon.astro';
+import { readFlash } from '../lib/forms';
+
+interface Props { title: string; subtitle?: string }
+const { title, subtitle } = Astro.props;
+const s = Astro.locals.session!;
+const t = s.tenant!;
+const flash = readFlash(Astro.cookies);
+const isCrew = s.role === 'crew';
+---
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+  <meta name="robots" content="noindex, nofollow" />
+  <meta name="theme-color" content="#13122B" />
+  <title>{title} · Crew · {t.name}</title>
+  <link rel="icon" href="/favicon.svg" type="image/svg+xml" />
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,600..800&family=Figtree:wght@400;500;600;700&display=swap" rel="stylesheet" />
+</head>
+<body class="min-h-screen bg-canvas">
+  <a href="#main" class="sr-only focus:not-sr-only focus:absolute focus:top-2 focus:left-2 btn-primary z-50">Skip to content</a>
+  <header class="sticky top-0 z-30 bg-ink text-white">
+    <div class="max-w-xl mx-auto flex items-center gap-3 px-4 h-14">
+      {!isCrew && <a href="/app/deliveries" class="grid place-items-center size-10 -ml-2 rounded-lg hover:bg-white/10" aria-label="Back to dashboard"><Icon name="arrow" class="rotate-180" /></a>}
+      <span class="grid place-items-center size-8 rounded-lg bg-pop text-[#1B1F4A] font-black" aria-hidden="true">B</span>
+      <div class="min-w-0 flex-1">
+        <p class="text-[11px] text-white/60 truncate leading-tight">{t.name}</p>
+        <p class="text-sm font-semibold truncate leading-tight">{s.user.name || s.user.email}</p>
+      </div>
+      <form method="post" action="/logout"><button class="grid place-items-center size-10 rounded-lg hover:bg-white/10 cursor-pointer" aria-label="Sign out"><Icon name="logout" /></button></form>
+    </div>
+  </header>
+  <main id="main" class="max-w-xl mx-auto px-4 pt-5 pb-24">
+    {flash && (
+      <div role="status" class:list={['mb-4 rounded-xl px-4 py-3 text-sm font-semibold flex items-center gap-2', flash.kind === 'ok' ? 'bg-green-50 text-green-800 border border-green-200' : 'bg-red-50 text-red-800 border border-red-200']}>
+        <Icon name={flash.kind === 'ok' ? 'check' : 'x'} size={16} />{flash.msg}
+      </div>
+    )}
+    <h1 class="text-2xl font-extrabold">{title}</h1>
+    {subtitle && <p class="text-ink-2 text-sm mt-0.5">{subtitle}</p>}
+    <div class="mt-4"><slot /></div>
+  </main>
+</body>
+</html>
