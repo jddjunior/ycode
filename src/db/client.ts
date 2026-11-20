@@ -21,7 +21,15 @@ async function create(): Promise<DB> {
       ssl: process.env.DATABASE_SSL === 'disable' ? false : url.includes('localhost') || url.includes('.railway.internal') ? false : 'require',
       prepare: false,
     });
-    return drizzle(client, { schema }) as unknown as DB;
+    const db = drizzle(client, { schema }) as unknown as DB;
+    // drizzle swaps postgres-js's date serializers for pass-throughs, so a raw JS Date
+    // inside an sql`` template would be sent as Date.toString() and rejected by Postgres.
+    // Serialize Dates to ISO-8601 for every timestamp/date type (strings pass unchanged).
+    const iso = (v: unknown) => (v instanceof Date ? v.toISOString() : v);
+    for (const oid of ['1082', '1083', '1114', '1184', '1266']) {
+      (client.options.serializers as Record<string, (v: unknown) => unknown>)[oid] = iso;
+    }
+    return db;
   }
   const { PGlite } = await import('@electric-sql/pglite');
   const { drizzle } = await import('drizzle-orm/pglite');

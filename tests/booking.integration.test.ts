@@ -1,11 +1,14 @@
 /**
- * Integration: real Postgres semantics via in-memory PGlite.
+ * Integration: real Postgres semantics. Runs on in-memory PGlite by default and on a
+ * real Postgres server when TEST_DATABASE_URL is set (CI does both) — the postgres-js
+ * driver path has its own serialization behaviour that PGlite does not exercise.
  * Proves holds + advisory lock prevent overbooking under concurrency,
  * payments are idempotent, and the revenue ledger accrues exactly once.
  */
 import { describe, it, expect, beforeAll } from 'vitest';
 
-process.env.PGLITE_DIR = 'memory';
+if (process.env.TEST_DATABASE_URL) process.env.DATABASE_URL = process.env.TEST_DATABASE_URL;
+else process.env.PGLITE_DIR = 'memory';
 
 const { getDb, schema } = await import('../src/db/client');
 const { provisionTenant } = await import('../src/lib/provision');
@@ -66,6 +69,15 @@ describe('booking integration', () => {
     const fees = await db.select().from(schema.revenueEvents).where(eq(schema.revenueEvents.bookingId, booking.id));
     expect(fees).toHaveLength(1);
     expect(fees[0].amountCents).toBe(booking.platformFeeCents);
+  });
+
+  it('accepts raw JS Dates inside sql templates (postgres-js serializer)', async () => {
+    const db = await getDb();
+    const { sql } = await import('drizzle-orm');
+    const since = new Date(Date.now() - 86_400_000);
+    const rows = await db.select({ n: sql<number>`count(*)::int` }).from(schema.bookings)
+      .where(sql`${schema.bookings.tenantId} = ${tenant.id} and ${schema.bookings.createdAt} >= ${since}`);
+    expect(Number(rows[0].n)).toBeGreaterThan(0);
   });
 
   it('rejects undeliverable ZIPs and enforces lead time', async () => {
